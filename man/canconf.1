@@ -1,4 +1,4 @@
-.TH CANCONF 1 "2026-04-22" "canconf 0.3.0" "User Commands"
+.TH CANCONF 1 "2026-04-22" "canconf 0.3.1" "User Commands"
 .SH NAME
 canconf \- reconfigure all SocketCAN / CAN\-FD interfaces in one shot
 .SH SYNOPSIS
@@ -101,15 +101,20 @@ Show help and exit.
 Success.
 .TP
 .B 1
-No CAN interfaces found.
+No CAN interfaces found, or at least one interface failed to configure. If
+multiple interfaces share a bus, a warning is printed to stderr listing the
+interfaces that succeeded and those that failed; other interfaces are not
+aborted because of a single failure.
 .TP
 .B 2
-Invalid spec.
-.TP
-Other
-Non\-zero exit status of a failed
-.BR ip (8)
-invocation.
+Invalid spec. Bitrates below 10 kbit/s are rejected as probable typos — if you
+typed
+.B canconf 800
+you almost certainly meant
+.BR "canconf 800k" ;
+a hint suggesting the
+.B k
+suffix is printed.
 .SH EXAMPLES
 .TP
 Show status of all CAN interfaces:

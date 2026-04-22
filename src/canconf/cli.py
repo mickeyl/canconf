@@ -44,6 +44,10 @@ from .common import (
 
 DEFAULT_TXQUEUELEN = 10000
 
+# Refuse suspiciously-low bitrates — almost always a missing 'k' suffix
+# (`canconf 800` when the user meant `canconf 800k`).
+MIN_BITRATE = 10_000
+
 # Standard CAN bitrates worth highlighting in `canconf bitrates`.
 STD_NOMINAL = [10_000, 20_000, 50_000, 100_000, 125_000, 250_000,
                500_000, 800_000, 1_000_000]
@@ -51,15 +55,24 @@ STD_DATA = [1_000_000, 2_000_000, 4_000_000, 5_000_000, 8_000_000]
 
 
 def parse_rate(s: str) -> int:
-    s = s.strip()
-    if not s:
+    orig = s.strip()
+    if not orig:
         raise ValueError("empty bitrate")
     mult = 1
-    if s[-1] in "kK":
-        mult, s = 1_000, s[:-1]
-    elif s[-1] in "mM":
-        mult, s = 1_000_000, s[:-1]
-    return int(float(s) * mult)
+    body = orig
+    if body[-1] in "kK":
+        mult, body = 1_000, body[:-1]
+    elif body[-1] in "mM":
+        mult, body = 1_000_000, body[:-1]
+    rate = int(float(body) * mult)
+    if rate < MIN_BITRATE:
+        hint = ""
+        if mult == 1 and rate > 0:
+            hint = f" — did you mean '{orig}k' ({rate} kbit/s)?"
+        raise ValueError(
+            f"{rate} bit/s is below the {MIN_BITRATE // 1000} kbit/s minimum{hint}"
+        )
+    return rate
 
 
 def parse_spec(spec: str) -> dict:
@@ -84,14 +97,17 @@ def parse_spec(spec: str) -> dict:
     return out
 
 
-def run(cmd: list[str], *, dry: bool, verbose: bool) -> None:
+def run(cmd: list[str], *, dry: bool, verbose: bool) -> bool:
+    """Run an ip command. Return True on success, False on non-zero exit.
+
+    In dry-run mode, always returns True.
+    """
     if dry or verbose:
         print("+ " + " ".join(shlex.quote(c) for c in cmd))
     if dry:
-        return
+        return True
     r = subprocess.run(cmd)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
+    return r.returncode == 0
 
 
 def show_status(ifaces: list[str]) -> None:
@@ -188,6 +204,22 @@ def show_bitrates(ifaces: list[str]) -> None:
         print()
 
 
+def report_outcome(ifaces: list[str], failed: dict[str, str]) -> int:
+    """Return exit code; print a mixed-state warning if applicable."""
+    if not failed:
+        return 0
+    ok_ifaces = [i for i in ifaces if i not in failed]
+    if ok_ifaces and len(ifaces) > 1:
+        msg = (
+            f"canconf: warning: configuration is inconsistent across interfaces — "
+            f"ok: {', '.join(ok_ifaces)}; failed: "
+            f"{', '.join(f'{i} ({s})' for i, s in failed.items())}. "
+            f"If these share a bus, the bus may be in an unstable state."
+        )
+        print(c(msg, common.BRIGHT_RED, common.BOLD), file=sys.stderr)
+    return 1
+
+
 def elevate_if_needed() -> None:
     if os.geteuid() == 0:
         return
@@ -278,28 +310,45 @@ def main() -> int:
     if not args.dry_run:
         elevate_if_needed()
 
+    failed: dict[str, str] = {}   # iface -> step that failed
+
+    def step(iface: str, stage: str, cmd: list[str]) -> bool:
+        if iface in failed:
+            return False
+        ok = run(cmd, dry=args.dry_run, verbose=args.verbose)
+        if not ok:
+            failed[iface] = stage
+            print(
+                c(f"canconf: {iface}: {stage} failed", common.BRIGHT_RED, common.BOLD),
+                file=sys.stderr,
+            )
+        return ok
+
     for i in ifaces:
-        run(["ip", "link", "set", i, "down"], dry=args.dry_run, verbose=args.verbose)
+        step(i, "down", ["ip", "link", "set", i, "down"])
 
     if spec["action"] == "down":
+        rc = report_outcome(ifaces, failed)
         if not args.dry_run and not args.quiet:
             show_status(ifaces)
-        return 0
+        return rc
 
     if spec["action"] == "configure":
         type_args = build_type_args(spec, args)
         for i in ifaces:
-            run(["ip", "link", "set", i] + type_args, dry=args.dry_run, verbose=args.verbose)
+            if not step(i, "configure", ["ip", "link", "set", i] + type_args):
+                continue
             if args.txqueuelen is not None:
-                run(["ip", "link", "set", i, "txqueuelen", str(args.txqueuelen)],
-                    dry=args.dry_run, verbose=args.verbose)
+                step(i, "txqueuelen",
+                     ["ip", "link", "set", i, "txqueuelen", str(args.txqueuelen)])
 
     for i in ifaces:
-        run(["ip", "link", "set", i, "up"], dry=args.dry_run, verbose=args.verbose)
+        step(i, "up", ["ip", "link", "set", i, "up"])
 
+    rc = report_outcome(ifaces, failed)
     if not args.dry_run and not args.quiet:
         show_status(ifaces)
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

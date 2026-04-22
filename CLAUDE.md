@@ -68,6 +68,8 @@ Three modules under `src/canconf/`:
 - Sample-point syntax (`@0.875/0.75`) is opt-in; many users don't care and the kernel picks reasonable defaults.
 - `canmon` measures bit-errors via `info_xstats.bus_error` (monotonic counter maintained by the driver), **not** via the live `berr-counter` TEC/REC (which oscillates and resets). This makes delta-per-second meaningful and makes the tool work without `berr-reporting on` at configure time.
 - `canmon` does not open a CAN socket; it only polls `ip`/sysfs. Zero bus impact, zero need for root.
+- Bitrates under `MIN_BITRATE` (10 kbit/s) are rejected at parse time as probable typos (`canconf 800` → `canconf 800k`). Real low-speed CAN below that is rare enough that the safety check wins; if it ever needs to be bypassed, add a `--allow-slow` flag rather than lowering the floor.
+- Per-iface failures during reconfigure don't abort the whole run. Each `ip link` step is gated on prior success of that iface; failed ifaces get a named stderr error (`canconf: canX: configure failed`) and are skipped for subsequent steps (so a bad spec doesn't strand a half-configured iface in the "up" loop). If any iface failed *and* there were multiple CAN ifaces, a mixed-state warning is printed — if they share a bus that warning is the one that matters.
 
 ## Release
 
