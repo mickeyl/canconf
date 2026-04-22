@@ -33,7 +33,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from . import __version__
-from .common import discover_ifaces, fmt_rate, get_links
+from . import common
+from .common import (
+    BOLD, BRIGHT_RED, CYAN, DIM, MAGENTA, RED, YELLOW,
+    c, color_state, discover_ifaces, fmt_rate, get_links,
+)
 
 
 @dataclass
@@ -95,16 +99,52 @@ def snapshot_all(ifaces: list[str]) -> dict[str, Snapshot]:
     return {i: Snapshot.from_link(links.get(i, {})) for i in ifaces}
 
 
-HEADER = f"{'TIME':>8}  {'IFACE':<6}  {'STATE':<14}  {'BITRATE':<10}  {'Δerr/s':>6}  {'Δbus/s':>6}  {'restarts':>8}  notes"
+def header() -> str:
+    return c(
+        f"{'TIME':>8}  {'IFACE':<6}  {'STATE':<14}  {'BITRATE':<10}  "
+        f"{'Δerr/s':>6}  {'Δbus/s':>6}  {'restarts':>8}  notes",
+        BOLD,
+    )
+
+
+def color_note(note: str) -> str:
+    if note.startswith("STATE "):
+        tail = note[len("STATE "):]
+        arrow = tail.find("→")
+        if arrow != -1:
+            old, new = tail[:arrow], tail[arrow + 1:]
+            return f"STATE {color_state(old)}→{color_state(new)}"
+        return c(note, MAGENTA)
+    if note.startswith("CONFIG "):
+        return c(note, MAGENTA)
+    if note.startswith("RESTART "):
+        return c(note, CYAN, BOLD)
+    if note.startswith("BIT-ERRORS "):
+        return c(note, BRIGHT_RED, BOLD)
+    return note
+
+
+def color_rate_delta(per_s: float, flagged: bool) -> str:
+    cell = f"{per_s:>6.0f}"
+    if flagged:
+        return c(cell, BRIGHT_RED, BOLD)
+    if per_s > 0:
+        return c(cell, YELLOW)
+    return cell
 
 
 def fmt_row(ts: str, iface: str, n: Snapshot, err_per_s: float,
             bus_per_s: float, flagged: bool, notes: list[str]) -> str:
-    flag = "!" if flagged else " "
-    note_str = "  ".join(notes)
+    flag = c("!", BRIGHT_RED, BOLD) if flagged else " "
+    note_str = "  ".join(color_note(x) for x in notes)
+    err_cell = color_rate_delta(err_per_s, err_per_s > 0 and not flagged)
+    bus_cell = color_rate_delta(bus_per_s, flagged)
+    restarts_cell = f"{n.restarts:>8}"
+    if n.restarts > 0:
+        restarts_cell = c(restarts_cell, CYAN)
     return (
-        f"{ts}  {iface:<6}  {n.state:<14}  {n.rate_str():<10}  "
-        f"{err_per_s:>6.0f}  {bus_per_s:>6.0f}  {n.restarts:>8}  "
+        f"{c(ts, DIM)}  {iface:<6}  {color_state(n.state, 14)}  {n.rate_str():<10}  "
+        f"{err_cell}  {bus_cell}  {restarts_cell}  "
         f"{flag} {note_str}".rstrip()
     )
 
@@ -123,9 +163,13 @@ def main() -> int:
                     help="print the initial snapshot and exit")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="emit a row every tick, not only on change")
+    ap.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     ap.add_argument("-V", "--version", action="store_true")
     ap.add_argument("-h", "--help", action="store_true")
     args = ap.parse_args()
+
+    if args.no_color:
+        common.set_color(False)
 
     if args.help:
         print(__doc__.strip())
@@ -146,7 +190,7 @@ def main() -> int:
 
     # Initial snapshot: always printed, so the user sees what is being monitored.
     prev = snapshot_all(ifaces)
-    print(HEADER)
+    print(header())
     ts = datetime.now().strftime("%H:%M:%S")
     for iface in ifaces:
         print(fmt_row(ts, iface, prev[iface], 0.0, 0.0, flagged=False, notes=[]))

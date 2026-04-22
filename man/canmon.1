@@ -51,6 +51,14 @@ Print the initial snapshot and exit.
 .BR \-v ", " \-\-verbose
 Emit a row every tick, not just on change.
 .TP
+.B \-\-no\-color
+Disable ANSI colour output. Colour is auto\-enabled on TTYs and disabled on
+pipes. The
+.B NO_COLOR
+environment variable also disables it;
+.B FORCE_COLOR
+forces it on.
+.TP
 .BR \-V ", " \-\-version
 Print version and exit.
 .TP

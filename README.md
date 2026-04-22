@@ -86,6 +86,7 @@ canconf bitrates                show achievable bitrates per interface
 | `-n`, `--dry-run` | Print the `ip` commands that would run, do nothing |
 | `-v`, `--verbose` | Print each `ip` command as it runs |
 | `-q`, `--quiet` | Suppress the post-apply status dump |
+| `--no-color` | Disable ANSI colour (auto-off on pipes; `NO_COLOR`/`FORCE_COLOR` env vars also work) |
 | `-V`, `--version` | Print version and exit |
 | `-h`, `--help` | Show help |
 
@@ -148,6 +149,7 @@ is printed. Pass `-v` to force a row every tick.)
 | `-t`, `--err-rate N`   | Threshold for the `Δbus/s` flag (default: 1) |
 | `-o`, `--once`         | Print initial snapshot and exit |
 | `-v`, `--verbose`      | Emit a row every tick, not just on change |
+| `--no-color`           | Disable ANSI colour (auto-off on pipes; `NO_COLOR`/`FORCE_COLOR` env vars also work) |
 | `-V`, `--version`      | |
 | `-h`, `--help`         | |
 

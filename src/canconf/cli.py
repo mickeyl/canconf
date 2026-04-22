@@ -36,7 +36,11 @@ import subprocess
 import sys
 
 from . import __version__
-from .common import discover_ifaces, fmt_rate, get_links
+from . import common
+from .common import (
+    BOLD, CYAN, DIM, MAGENTA,
+    c, color_state, discover_ifaces, fmt_rate, get_links,
+)
 
 DEFAULT_TXQUEUELEN = 10000
 
@@ -124,12 +128,18 @@ def show_status(ifaces: list[str]) -> None:
         rows.append((name, state, mode, rate, sp_col, qlen_col, driver))
 
     cols = list(zip(*rows))
-    w = [max(len(c) for c in col) for col in cols]
+    w = [max(len(col_val) for col_val in col) for col in cols]
     for name, state, mode, rate, sp_col, qlen_col, driver in rows:
+        mode_colored = c(mode, MAGENTA) if mode == "CAN-FD" else c(mode, CYAN)
+        # color_state pads internally so w[1] is still the correct visual width
         print(
-            f"{name:<{w[0]}}  {state:<{w[1]}}  {mode:<{w[2]}}  "
-            f"{rate:<{w[3]}}  sp {sp_col:<{w[4]}}  qlen {qlen_col:<{w[5]}}  "
-            f"drv {driver}"
+            f"{c(name, BOLD):<{w[0] + len(c('', BOLD))}}"
+            f"  {color_state(state, w[1])}"
+            f"  {mode_colored + ' ' * (w[2] - len(mode))}"
+            f"  {rate:<{w[3]}}"
+            f"  {c('sp', DIM)} {sp_col:<{w[4]}}"
+            f"  {c('qlen', DIM)} {qlen_col:<{w[5]}}"
+            f"  {c('drv', DIM)} {c(driver, CYAN)}"
         )
 
 
@@ -227,9 +237,13 @@ def main() -> int:
     ap.add_argument("-n", "--dry-run", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("-q", "--quiet", action="store_true")
+    ap.add_argument("--no-color", action="store_true", help="disable ANSI colour")
     ap.add_argument("-V", "--version", action="store_true")
     ap.add_argument("-h", "--help", action="store_true")
     args = ap.parse_args()
+
+    if args.no_color:
+        common.set_color(False)
 
     if args.help:
         print(__doc__.strip())
