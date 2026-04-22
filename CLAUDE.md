@@ -58,7 +58,7 @@ Three modules under `src/canconf/`:
 
 1. Call `get_links(stats=True)` and wrap each selected iface in a `Snapshot` dataclass (state, bittiming, rx/tx errors from `stats64`, all of `info_xstats`).
 2. Compare against the previous tick: detect state transition, bittiming change, restart-count increase, and compute `Δerr/s` and `Δbus/s`.
-3. Emit one formatted row per iface (unless `--log-only`, in which case only ticks with events are printed). Threshold for the `Δbus/s` flag is tunable via `--err-rate`.
+3. At startup: emit the header and one row per iface (initial snapshot). Subsequent ticks: emit a row only for ifaces where *something* changed (state/bittiming/restart count) or the `Δbus/s` threshold was crossed. `--verbose` overrides this and emits every iface every tick. `--once` prints only the startup snapshot and exits.
 
 **Key design choices:**
 

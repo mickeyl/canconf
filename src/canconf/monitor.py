@@ -5,9 +5,14 @@ Usage:
   canmon                           monitor all can* interfaces, 1 Hz, forever
   canmon -i can0,can1              restrict to these interfaces
   canmon -r 0.5                    tick every 500 ms
-  canmon -t 10                     flag lines with > 10 bus-errors / sec
-  canmon -o                        single tick, then exit
-  canmon -l                        events only (no periodic table lines)
+  canmon -t 10                     flag ticks with > 10 bus-errors / sec
+  canmon -o                        snapshot the current state and exit
+  canmon -v                        verbose: emit a row every tick
+
+Default behaviour: print the current state of every selected interface once
+at startup, then stay silent until something changes. A per-interface row is
+emitted only on a state transition, bittiming change, auto-restart, or when
+the bit-error rate exceeds the --err-rate threshold.
 
 Columns:
   TIME STATE BITRATE  Δerr/s Δbus/s restarts notes
@@ -93,6 +98,17 @@ def snapshot_all(ifaces: list[str]) -> dict[str, Snapshot]:
 HEADER = f"{'TIME':>8}  {'IFACE':<6}  {'STATE':<14}  {'BITRATE':<10}  {'Δerr/s':>6}  {'Δbus/s':>6}  {'restarts':>8}  notes"
 
 
+def fmt_row(ts: str, iface: str, n: Snapshot, err_per_s: float,
+            bus_per_s: float, flagged: bool, notes: list[str]) -> str:
+    flag = "!" if flagged else " "
+    note_str = "  ".join(notes)
+    return (
+        f"{ts}  {iface:<6}  {n.state:<14}  {n.rate_str():<10}  "
+        f"{err_per_s:>6.0f}  {bus_per_s:>6.0f}  {n.restarts:>8}  "
+        f"{flag} {note_str}".rstrip()
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="canmon", add_help=False,
@@ -103,9 +119,10 @@ def main() -> int:
                     help="tick interval in seconds (default: 1.0)")
     ap.add_argument("-t", "--err-rate", type=float, default=1.0,
                     help="flag ticks when bus-errors/sec exceeds this (default: 1)")
-    ap.add_argument("-o", "--once", action="store_true")
-    ap.add_argument("-l", "--log-only", action="store_true",
-                    help="print events only, no periodic table lines")
+    ap.add_argument("-o", "--once", action="store_true",
+                    help="print the initial snapshot and exit")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="emit a row every tick, not only on change")
     ap.add_argument("-V", "--version", action="store_true")
     ap.add_argument("-h", "--help", action="store_true")
     args = ap.parse_args()
@@ -127,9 +144,16 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, lambda *_: (print(), sys.exit(0)))
 
+    # Initial snapshot: always printed, so the user sees what is being monitored.
     prev = snapshot_all(ifaces)
-    if not args.log_only:
-        print(HEADER)
+    print(HEADER)
+    ts = datetime.now().strftime("%H:%M:%S")
+    for iface in ifaces:
+        print(fmt_row(ts, iface, prev[iface], 0.0, 0.0, flagged=False, notes=[]))
+    sys.stdout.flush()
+
+    if args.once:
+        return 0
 
     while True:
         time.sleep(args.rate)
@@ -156,22 +180,11 @@ def main() -> int:
             if flagged:
                 notes.append(f"BIT-ERRORS {bus_per_s:.0f}/s > {args.err_rate:.0f}/s")
 
-            flag = "!" if flagged else " "
-            note_str = "  ".join(notes)
-
-            if args.log_only:
-                if notes:
-                    print(f"{ts}  {iface:<6}  {flag} {note_str}")
-            else:
-                print(
-                    f"{ts}  {iface:<6}  {n.state:<14}  {n.rate_str():<10}  "
-                    f"{err_per_s:>6.0f}  {bus_per_s:>6.0f}  {n.restarts:>8}  "
-                    f"{flag} {note_str}".rstrip()
-                )
+            if args.verbose or notes:
+                print(fmt_row(ts, iface, n, err_per_s, bus_per_s, flagged, notes))
 
         prev = now
-        if args.once:
-            return 0
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":

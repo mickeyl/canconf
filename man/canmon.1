@@ -8,10 +8,19 @@ canmon \- monitor SocketCAN / CAN\-FD interface state, configuration, and bit\-e
 .B canmon
 polls every CAN interface on the host (or the subset given via
 .BR \-\-ifaces )
-at a configurable interval and emits a line per interface per tick showing
-the CAN error state, bitrate, per\-second error deltas, and notable events:
-state transitions, configuration changes, auto\-restarts, and ticks in which
-the CAN controller bit\-error rate exceeds a threshold.
+at a configurable interval and tracks the CAN error state, bitrate, and per\-second
+error deltas.
+.PP
+By default the current state of every selected interface is printed once at
+startup and then
+.B canmon
+stays silent, emitting a new row only when something actually changes: a state
+transition, a bittiming change, an auto\-restart, or a tick in which the CAN
+controller bit\-error rate exceeds
+.BR \-\-err\-rate .
+Use
+.B \-\-verbose
+to force a row per interface per tick instead.
 .PP
 All data comes from
 .BR ip (8)
@@ -37,11 +46,10 @@ advances by more than
 per second. Default: 1.
 .TP
 .BR \-o ", " \-\-once
-Print a single tick, then exit.
+Print the initial snapshot and exit.
 .TP
-.BR \-l ", " \-\-log\-only
-Suppress the periodic table line; only print ticks in which an event occurred
-(state change, config change, restart, or threshold flag).
+.BR \-v ", " \-\-verbose
+Emit a row every tick, not just on change.
 .TP
 .BR \-V ", " \-\-version
 Print version and exit.
@@ -99,8 +107,11 @@ Default 1 Hz monitor of all interfaces:
 Sub\-second monitor, flag anything above 5 bit\-errors/sec:
 .B canmon \-r 0.5 \-t 5
 .TP
-Events only, single interface, forever:
-.B canmon \-l \-i can0
+Verbose (tick every interval), single interface:
+.B canmon \-v \-i can0
+.TP
+Snapshot current state of can0 and exit:
+.B canmon \-o \-i can0
 .SH SEE ALSO
 .BR canconf (1),
 .BR ip\-link (8),

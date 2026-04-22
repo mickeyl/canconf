@@ -119,9 +119,10 @@ can1  UP  CAN-FD  500k/2M  sp 0.875/0.750  qlen 10000  drv gs_usb
 
 ## canmon
 
-`canmon` tails every CAN interface at 1 Hz (tunable) and prints a line per
-interface per tick, flagging state transitions, configuration changes,
-auto-restarts, and ticks in which the CAN controller bit-error rate exceeds a
+`canmon` tails every CAN interface at 1 Hz (tunable). It prints the current
+state once at startup and then stays silent, emitting a new row only when
+something actually changes: a state transition, a bittiming change, an
+auto-restart, or a tick in which the CAN controller bit-error rate exceeds a
 threshold. It needs no root and reads only from `ip -j -details -s link show`
 plus `/sys/class/net` — no CAN traffic is injected or intercepted.
 
@@ -135,6 +136,9 @@ plus `/sys/class/net` — no CAN traffic is injected or intercepted.
 14:23:52  can0    ERROR-ACTIVE    500k             0       0         1  STATE BUS-OFF→ERROR-ACTIVE  RESTART #1
 ```
 
+(Between 14:23:46 and 14:23:48, and at any other tick with no change, nothing
+is printed. Pass `-v` to force a row every tick.)
+
 ### Options
 
 | Flag | Description |
@@ -142,8 +146,8 @@ plus `/sys/class/net` — no CAN traffic is injected or intercepted.
 | `-i`, `--ifaces a,b,c` | Restrict to these interfaces |
 | `-r`, `--rate SECONDS` | Tick interval (default: 1.0) |
 | `-t`, `--err-rate N`   | Threshold for the `Δbus/s` flag (default: 1) |
-| `-o`, `--once`         | Single tick, then exit |
-| `-l`, `--log-only`     | Print only ticks with events; no heartbeat rows |
+| `-o`, `--once`         | Print initial snapshot and exit |
+| `-v`, `--verbose`      | Emit a row every tick, not just on change |
 | `-V`, `--version`      | |
 | `-h`, `--help`         | |
 
