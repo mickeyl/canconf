@@ -29,14 +29,13 @@ Requires root; self-elevates with sudo if needed.
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import pathlib
 import shlex
 import subprocess
 import sys
 
 from . import __version__
+from .common import discover_ifaces, fmt_rate, get_links
 
 DEFAULT_TXQUEUELEN = 10000
 
@@ -75,21 +74,6 @@ def parse_spec(spec: str) -> dict:
     return out
 
 
-def discover_ifaces() -> list[str]:
-    root = pathlib.Path("/sys/class/net")
-    if not root.exists():
-        return []
-    found = []
-    for p in sorted(root.iterdir()):
-        # CAN ARPHRD is 280
-        try:
-            if (p / "type").read_text().strip() == "280":
-                found.append(p.name)
-        except OSError:
-            pass
-    return found
-
-
 def run(cmd: list[str], *, dry: bool, verbose: bool) -> None:
     if dry or verbose:
         print("+ " + " ".join(shlex.quote(c) for c in cmd))
@@ -100,23 +84,11 @@ def run(cmd: list[str], *, dry: bool, verbose: bool) -> None:
         sys.exit(r.returncode)
 
 
-def fmt_rate(r: int) -> str:
-    if r % 1_000_000 == 0:
-        return f"{r // 1_000_000}M"
-    if r % 1_000 == 0:
-        return f"{r // 1_000}k"
-    return str(r)
-
-
 def show_status(ifaces: list[str]) -> None:
     if not ifaces:
         print("no CAN interfaces found")
         return
-    r = subprocess.run(["ip", "-j", "-details", "link", "show"], capture_output=True, text=True)
-    try:
-        links = {l["ifname"]: l for l in json.loads(r.stdout)}
-    except (ValueError, KeyError):
-        links = {}
+    links = get_links()
 
     rows = []
     for name in ifaces:

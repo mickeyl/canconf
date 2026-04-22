@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`canconf` is a one-shot reconfigurator for SocketCAN / CAN-FD interfaces on Linux. It replaces the long, order-sensitive `ip link set ...` dance you'd otherwise run per interface with a single terse command like `canconf 500k/2M@0.875/0.75`. Its niche: hosts with two or more CAN interfaces on the same bus that must be configured identically.
+A two-tool package for Linux SocketCAN admins:
+
+- **`canconf`** — one-shot reconfigurator for CAN / CAN-FD interfaces. Replaces the long, order-sensitive `ip link set ...` dance with a single terse command like `canconf 500k/2M@0.875/0.75`. Its niche: hosts with two or more CAN interfaces on the same bus that must be configured identically.
+- **`canmon`** — read-only live monitor. Tails state, bittiming, frame-error deltas, and controller bit-error deltas per interface per tick; flags state transitions, config changes, auto-restarts, and threshold breaches.
 
 Pure Python 3.9+ stdlib — no runtime dependencies. Distributed on PyPI, meant to be installed via `pipx`.
 
@@ -29,9 +32,15 @@ Testing against real hardware needs root; `canconf` self-elevates via `sudo -- p
 
 ## Architecture
 
-Single-module package. Everything lives in `src/canconf/cli.py` (~200 lines). `__init__.py` exports `__version__`; `__main__.py` makes `python -m canconf` work.
+Three modules under `src/canconf/`:
 
-**Pipeline per run:**
+- `common.py` — `discover_ifaces()` (scans `/sys/class/net/*/type` for ARPHRD_CAN = 280), `fmt_rate()` (500000→"500k"), `get_links(stats=False)` (wraps `ip -j -details [-s] link show`, returns `{ifname: dict}`). Shared by both tools.
+- `cli.py` — `canconf` entry point.
+- `monitor.py` — `canmon` entry point.
+
+`__init__.py` exports `__version__`; `__main__.py` makes `python -m canconf` run the reconfigurator. `canmon` is exposed only via the pyproject entry point (no `python -m canmon`).
+
+**canconf pipeline per run:**
 
 1. **Discover** CAN interfaces by scanning `/sys/class/net/*/type` for ARPHRD_CAN (`280`). This catches `can*`, `vcan*`, `slcan*` without pattern-matching names. Override with `--ifaces`.
 
@@ -43,12 +52,20 @@ Single-module package. Everything lives in `src/canconf/cli.py` (~200 lines). `_
 
 5. **Show** post-apply state unless `--quiet` or `--dry-run`. The driver may silently round the requested bitrate to the nearest achievable value given the CAN clock, so reading back the actual config matters.
 
+**canmon pipeline per tick:**
+
+1. Call `get_links(stats=True)` and wrap each selected iface in a `Snapshot` dataclass (state, bittiming, rx/tx errors from `stats64`, all of `info_xstats`).
+2. Compare against the previous tick: detect state transition, bittiming change, restart-count increase, and compute `Δerr/s` and `Δbus/s`.
+3. Emit one formatted row per iface (unless `--log-only`, in which case only ticks with events are printed). Threshold for the `Δbus/s` flag is tunable via `--err-rate`.
+
 **Key design choices:**
 
 - No pattern-matching on interface names — rely on ARPHRD_CAN so exotic transports (slcan, usb-based gs_can, …) are picked up automatically.
 - Status is read from `ip -j -details link show` and pulled from `linkinfo.info_data.bittiming` / `.data_bittiming`. CAN-FD is inferred by the presence of `data_bittiming` (not by `ctrlmode_supported`, which only indicates driver capability).
 - `ip` is shelled out rather than talking netlink directly: keeps the dep surface at zero and the commands are trivially auditable via `-v`/`-n`.
 - Sample-point syntax (`@0.875/0.75`) is opt-in; many users don't care and the kernel picks reasonable defaults.
+- `canmon` measures bit-errors via `info_xstats.bus_error` (monotonic counter maintained by the driver), **not** via the live `berr-counter` TEC/REC (which oscillates and resets). This makes delta-per-second meaningful and makes the tool work without `berr-reporting on` at configure time.
+- `canmon` does not open a CAN socket; it only polls `ip`/sysfs. Zero bus impact, zero need for root.
 
 ## Release
 

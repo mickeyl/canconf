@@ -1,0 +1,109 @@
+.TH CANMON 1 "2026-04-22" "canmon 0.1.0" "User Commands"
+.SH NAME
+canmon \- monitor SocketCAN / CAN\-FD interface state, configuration, and bit\-error rate
+.SH SYNOPSIS
+.B canmon
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B canmon
+polls every CAN interface on the host (or the subset given via
+.BR \-\-ifaces )
+at a configurable interval and emits a line per interface per tick showing
+the CAN error state, bitrate, per\-second error deltas, and notable events:
+state transitions, configuration changes, auto\-restarts, and ticks in which
+the CAN controller bit\-error rate exceeds a threshold.
+.PP
+All data comes from
+.BR ip (8)
+(via the
+.B \-j \-details \-statistics
+options) and
+.B /sys/class/net
+— no root required, no traffic interference, no dependency on
+.BR berr\-reporting (8).
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-ifaces " " \fILIST\fR
+Comma\-separated list of interfaces. Default: every CAN interface.
+.TP
+.BR \-r ", " \-\-rate " " \fISECONDS\fR
+Tick interval. Default: 1.0.
+.TP
+.BR \-t ", " \-\-err\-rate " " \fIN\fR
+Flag ticks in which the CAN controller bit\-error counter
+.RB ( info_xstats.bus_error )
+advances by more than
+.I N
+per second. Default: 1.
+.TP
+.BR \-o ", " \-\-once
+Print a single tick, then exit.
+.TP
+.BR \-l ", " \-\-log\-only
+Suppress the periodic table line; only print ticks in which an event occurred
+(state change, config change, restart, or threshold flag).
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.TP
+.BR \-h ", " \-\-help
+Show help and exit.
+.SH OUTPUT
+Columns:
+.TP
+.B TIME
+Local wall\-clock time of the tick (HH:MM:SS).
+.TP
+.B IFACE
+Interface name.
+.TP
+.B STATE
+CAN error state:
+.BR ERROR\-ACTIVE ,
+.BR ERROR\-WARNING ,
+.BR ERROR\-PASSIVE ,
+or
+.BR BUS\-OFF .
+.TP
+.B BITRATE
+Nominal bitrate, or nominal/data for CAN\-FD.
+.TP
+.B "Δerr/s"
+Frame\-level rx+tx error delta per second (from
+.BR stats64 ).
+.TP
+.B "Δbus/s"
+CAN controller bit\-error delta per second (from
+.BR info_xstats.bus_error ).
+.TP
+.B restarts
+Running total of driver\-initiated auto\-restarts after bus\-off (requires
+.B restart\-ms
+to be non\-zero at configure time).
+.TP
+.B notes
+Pipe\-separated event tags:
+.B STATE old→new
+on error\-state transition;
+.B CONFIG old→new
+on bittiming change;
+.B RESTART #N
+on auto\-restart;
+.B BIT\-ERRORS N/s > T/s
+when the threshold is breached.
+.SH EXAMPLES
+.TP
+Default 1 Hz monitor of all interfaces:
+.B canmon
+.TP
+Sub\-second monitor, flag anything above 5 bit\-errors/sec:
+.B canmon \-r 0.5 \-t 5
+.TP
+Events only, single interface, forever:
+.B canmon \-l \-i can0
+.SH SEE ALSO
+.BR canconf (1),
+.BR ip\-link (8),
+.BR candump (1)
+.SH AUTHOR
+Dr. Michael Lauer <mickey@vanille-media.de>

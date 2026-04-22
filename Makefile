@@ -11,8 +11,8 @@ MANDIR    ?= $(PREFIX)/share/man
 VERSION   := $(shell grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 
 .PHONY: all help build install install-editable uninstall reinstall \
-        run status dry test check fmt lint clean distclean \
-        vcan vcanfd vcan-down man release publish
+        run status monitor dry test check fmt lint clean distclean \
+        vcan vcanfd vcan-down man man-canmon release publish
 
 all: help
 
@@ -23,14 +23,15 @@ build:
 
 install:
 	$(PIPX) install --force .
-	install -Dm644 man/$(PKG).1 $(MANDIR)/man1/$(PKG).1
+	install -Dm644 man/canconf.1 $(MANDIR)/man1/canconf.1
+	install -Dm644 man/canmon.1  $(MANDIR)/man1/canmon.1
 
 install-editable:
 	$(PIPX) install --force --editable .
 
 uninstall:
 	-$(PIPX) uninstall $(PKG)
-	rm -f $(MANDIR)/man1/$(PKG).1
+	rm -f $(MANDIR)/man1/canconf.1 $(MANDIR)/man1/canmon.1
 
 reinstall: uninstall install
 
@@ -39,6 +40,10 @@ reinstall: uninstall install
 # Show current status of all CAN interfaces on this host.
 status:
 	$(RUN_PY) -m $(PKG)
+
+# Monitor all CAN interfaces from a source checkout.
+monitor:
+	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.exit(main())"
 
 # Dry-run a full reconfigure; override SPEC / IFACES on the command line.
 SPEC   ?= 500k/2M@0.875/0.75
@@ -53,6 +58,7 @@ test:
 	$(RUN_PY) -m $(PKG) -n 500k/2M -i vcan0 >/dev/null
 	$(RUN_PY) -m $(PKG) -n 500k/2M@0.875/0.75 -i vcan0 >/dev/null
 	$(RUN_PY) -m $(PKG) -n off -i vcan0 >/dev/null
+	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.argv=['canmon','--help']; sys.exit(main())" >/dev/null
 	@echo "ok"
 
 # --- quality -----------------------------------------------------------------
@@ -86,7 +92,10 @@ vcan-down:
 # --- docs --------------------------------------------------------------------
 
 man:
-	@man ./man/$(PKG).1
+	@man ./man/canconf.1
+
+man-canmon:
+	@man ./man/canmon.1
 
 # --- release -----------------------------------------------------------------
 
@@ -130,7 +139,8 @@ help:
 	@echo "  reinstall          uninstall + install"
 	@echo ""
 	@echo "Run / test:"
-	@echo "  status             show current CAN interface status"
+	@echo "  status             show current CAN interface status (canconf)"
+	@echo "  monitor            live CAN health monitor (canmon)"
 	@echo "  dry SPEC=500k/2M   dry-run a reconfigure"
 	@echo "  test               run quick self-tests"
 	@echo "  check              python -m compileall"
@@ -142,7 +152,8 @@ help:
 	@echo "  vcan-down          tear down vcan0"
 	@echo ""
 	@echo "Docs:"
-	@echo "  man                view man page"
+	@echo "  man                view canconf(1)"
+	@echo "  man-canmon         view canmon(1)"
 	@echo ""
 	@echo "Release:"
 	@echo "  release            tag v\$$VERSION and push"

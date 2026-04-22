@@ -28,6 +28,7 @@ classifiers = [
 
 [project.scripts]
 canconf = "canconf.cli:main"
+canmon = "canconf.monitor:main"
 
 [project.urls]
 Homepage = "https://github.com/mickeyl/canconf"
