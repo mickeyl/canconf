@@ -1,0 +1,116 @@
+.TH CANCONF 1 "2026-04-22" "canconf 0.1.0" "User Commands"
+.SH NAME
+canconf \- reconfigure all SocketCAN / CAN\-FD interfaces in one shot
+.SH SYNOPSIS
+.B canconf
+.RI [ OPTIONS ]
+.RI [ SPEC ]
+.SH DESCRIPTION
+.B canconf
+discovers every CAN interface on the host (any net device whose ARPHRD type is
+CAN, i.e.
+.BR can* ,
+.BR vcan* ,
+.BR slcan* )
+and applies the same configuration to all of them (or to the subset given via
+.BR \-\-ifaces ).
+Each run takes the interfaces down, applies the requested parameters, and
+brings them back up. If not already root,
+.B canconf
+re\-executes itself under
+.BR sudo (8).
+.SH SPEC
+.TP
+.B BITRATE
+Classic CAN at the given nominal bitrate, e.g. \fB500k\fR, \fB1M\fR, \fB125000\fR.
+.TP
+.B BITRATE/DBITRATE
+CAN\-FD with a nominal and a data bitrate, e.g. \fB500k/2M\fR.
+.TP
+.B BITRATE[/DBITRATE]@SP[/DSP]
+Optional sample points appended after
+.BR @ ,
+e.g. \fB500k/2M@0.875/0.75\fR.
+.TP
+.B off \fR|\fR down
+Bring all selected interfaces down.
+.TP
+.B up
+Bring all selected interfaces up without reconfiguring.
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-ifaces " " \fILIST\fR
+Comma\-separated list of interfaces. Default: every CAN interface.
+.TP
+.BR \-r ", " \-\-restart\-ms " " \fIN\fR
+Enable automatic restart on bus\-off after N milliseconds.
+.TP
+.B \-\-listen\-only
+Enable listen\-only mode.
+.TP
+.B \-\-loopback
+Enable loopback mode.
+.TP
+.B \-\-one\-shot
+Enable one\-shot mode.
+.TP
+.B \-\-berr
+Enable bus error reporting.
+.TP
+.BR \-\-term " " \fIOHM\fR
+Set the termination resistor value (requires driver support).
+.TP
+.BR \-\-txqueuelen " " \fIN\fR
+Override the tx queue length. Default: 10000.
+.TP
+.BR \-n ", " \-\-dry\-run
+Print the
+.BR ip (8)
+commands that would run; do not execute them.
+.TP
+.BR \-v ", " \-\-verbose
+Print each
+.BR ip (8)
+command as it runs.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress the post\-apply status dump.
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.TP
+.BR \-h ", " \-\-help
+Show help and exit.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+No CAN interfaces found.
+.TP
+.B 2
+Invalid spec.
+.TP
+Other
+Non\-zero exit status of a failed
+.BR ip (8)
+invocation.
+.SH EXAMPLES
+.TP
+Show status of all CAN interfaces:
+.B canconf
+.TP
+Configure every CAN interface to 500 kbit/s classic CAN:
+.B canconf 500k
+.TP
+Configure CAN\-FD at 500k nominal / 2M data with sample points:
+.B canconf 500k/2M@0.875/0.75
+.TP
+Restrict to two interfaces, enable auto\-restart:
+.B canconf 1M \-i can0,can1 \-r 100
+.SH SEE ALSO
+.BR ip\-link (8),
+.BR candump (1)
+.SH AUTHOR
+Dr. Michael Lauer <mickey@vanille-media.de>
