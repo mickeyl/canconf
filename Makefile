@@ -1,6 +1,7 @@
 PKG       := canconf
 PYTHON    ?= python3
 PIPX      ?= pipx
+TWINE     ?= twine
 
 # For running from a source checkout without installing.
 RUN_PY    := PYTHONPATH=src $(PYTHON)
@@ -117,7 +118,7 @@ publish: clean build
 	@echo ""
 	@echo "About to upload $(PKG) $(VERSION) to PyPI in 5s... (Ctrl-C to abort)"
 	@sleep 5
-	$(PYTHON) -m twine upload --skip-existing dist/*
+	$(TWINE) upload --skip-existing dist/*
 
 # --- housekeeping ------------------------------------------------------------
 
