@@ -178,18 +178,8 @@ plus `/sys/class/net` — no CAN traffic is injected, intercepted, or generated.
 
 ![canmon screenshot showing state transitions and config changes in colour](assets/canmon.png)
 
-```
-❯ canmon -r 0.5 -t 5
-    TIME  IFACE   STATE           BITRATE     Δerr/s  Δbus/s  restarts  notes
-14:23:45  can0    ERROR-ACTIVE    500k             0       0         0
-14:23:45  can1    ERROR-ACTIVE    500k/2M          0       0         0
-14:23:46  can0    ERROR-WARNING   500k            12       8         0  STATE ERROR-ACTIVE→ERROR-WARNING  BIT-ERRORS 8/s > 5/s
-14:23:48  can0    BUS-OFF         500k             4      14         0  STATE ERROR-WARNING→BUS-OFF  BIT-ERRORS 14/s > 5/s
-14:23:52  can0    ERROR-ACTIVE    500k             0       0         1  STATE BUS-OFF→ERROR-ACTIVE  RESTART #1
-```
-
-(Between 14:23:46 and 14:23:48, and at any other tick with no change, nothing
-is printed. Pass `-v` to force a row every tick.)
+Between ticks with no events, nothing is printed. Pass `-v` to force a row
+every tick.
 
 ### Options
 
