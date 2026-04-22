@@ -176,6 +176,8 @@ auto-restart, or a tick in which the CAN controller bit-error rate exceeds a
 threshold. It needs no root and reads only from `ip -j -details -s link show`
 plus `/sys/class/net` — no CAN traffic is injected, intercepted, or generated.
 
+![canmon screenshot showing state transitions and config changes in colour](assets/canmon.png)
+
 ```
 ❯ canmon -r 0.5 -t 5
     TIME  IFACE   STATE           BITRATE     Δerr/s  Δbus/s  restarts  notes
