@@ -50,7 +50,9 @@ Three modules under `src/canconf/`:
 
 4. **Apply**: for each selected iface, `ip link set IF down` → `ip link set IF type can ...` (+ `txqueuelen`) → `ip link set IF up`. Default `txqueuelen` is 10000 because the kernel default of 10 is far too low for CAN.
 
-5. **Show** post-apply state unless `--quiet` or `--dry-run`. The driver may silently round the requested bitrate to the nearest achievable value given the CAN clock, so reading back the actual config matters.
+5. **Show** post-apply state unless `--quiet` or `--dry-run`. Status rows include `qlen` (`txqlen` from `ip`) and `drv` (`bittiming_const.name` — typically the SocketCAN driver name). The driver may silently round the requested bitrate to the nearest achievable value given the CAN clock, so reading back the actual config matters.
+
+**Introspection (`canconf bitrates`):** derives the achievable bitrate envelope per interface from `bittiming_const` + `clock` using `bitrate = clock / (brp · (1 + tseg1 + tseg2))` — min comes from the max values, max from the mins. Intersects with the set of standard CAN bitrates (10k…1M for nominal, 1M…8M for FD data) and shows both the raw envelope and the matching standard rates. FD support is detected by presence of `data_bittiming_const`.
 
 **canmon pipeline per tick:**
 

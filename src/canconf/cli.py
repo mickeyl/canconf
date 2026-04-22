@@ -8,6 +8,7 @@ Usage:
   canconf 500k/2M@0.8/0.75        same, with nominal/data sample points
   canconf off            | down   bring all interfaces down
   canconf up                      bring all interfaces up (no reconfigure)
+  canconf bitrates                show achievable bitrates per interface
 
   -i, --ifaces a,b,c              only these (default: all can*)
   -r, --restart-ms N              auto-restart on bus-off after N ms
@@ -38,6 +39,11 @@ from . import __version__
 from .common import discover_ifaces, fmt_rate, get_links
 
 DEFAULT_TXQUEUELEN = 10000
+
+# Standard CAN bitrates worth highlighting in `canconf bitrates`.
+STD_NOMINAL = [10_000, 20_000, 50_000, 100_000, 125_000, 250_000,
+               500_000, 800_000, 1_000_000]
+STD_DATA = [1_000_000, 2_000_000, 4_000_000, 5_000_000, 8_000_000]
 
 
 def parse_rate(s: str) -> int:
@@ -94,32 +100,82 @@ def show_status(ifaces: list[str]) -> None:
     for name in ifaces:
         link = links.get(name, {})
         state = link.get("operstate", "?")
+        qlen = link.get("txqlen")
         data = link.get("linkinfo", {}).get("info_data", {}) or {}
         bt = data.get("bittiming") or {}
         dbt = data.get("data_bittiming")
+        driver = (data.get("bittiming_const") or {}).get("name") or "-"
         mode = "CAN-FD" if dbt else "CAN"
         if bt.get("bitrate"):
             rate = fmt_rate(bt["bitrate"])
             if dbt and dbt.get("bitrate"):
-                rate += f" / {fmt_rate(dbt['bitrate'])}"
+                rate += f"/{fmt_rate(dbt['bitrate'])}"
         else:
             rate = "-"
         sp = bt.get("sample_point")
         dsp = (dbt or {}).get("sample_point")
         if sp and dsp:
-            extra = f"sp {sp}/{dsp}"
+            sp_col = f"{sp}/{dsp}"
         elif sp:
-            extra = f"sp {sp}"
+            sp_col = str(sp)
         else:
-            extra = ""
-        rows.append((name, state, mode, rate, extra))
+            sp_col = "-"
+        qlen_col = str(qlen) if qlen is not None else "-"
+        rows.append((name, state, mode, rate, sp_col, qlen_col, driver))
 
-    w_name = max(len(r[0]) for r in rows)
-    w_state = max(len(r[1]) for r in rows)
-    w_mode = max(len(r[2]) for r in rows)
-    w_rate = max(len(r[3]) for r in rows)
-    for name, state, mode, rate, extra in rows:
-        print(f"{name:<{w_name}}  {state:<{w_state}}  {mode:<{w_mode}}  {rate:<{w_rate}}  {extra}".rstrip())
+    cols = list(zip(*rows))
+    w = [max(len(c) for c in col) for col in cols]
+    for name, state, mode, rate, sp_col, qlen_col, driver in rows:
+        print(
+            f"{name:<{w[0]}}  {state:<{w[1]}}  {mode:<{w[2]}}  "
+            f"{rate:<{w[3]}}  sp {sp_col:<{w[4]}}  qlen {qlen_col:<{w[5]}}  "
+            f"drv {driver}"
+        )
+
+
+def bittiming_range(clock: int, const: dict) -> tuple[int, int]:
+    """Return (min_bitrate, max_bitrate) achievable by the given bittiming_const.
+
+    bitrate = clock / (brp * (1 + tseg1 + tseg2))
+    """
+    brp = const["brp"]
+    tseg1 = const["tseg1"]
+    tseg2 = const["tseg2"]
+    lo = clock // (brp["max"] * (1 + tseg1["max"] + tseg2["max"]))
+    hi = clock // (brp["min"] * (1 + tseg1["min"] + tseg2["min"]))
+    return lo, hi
+
+
+def show_bitrates(ifaces: list[str]) -> None:
+    links = get_links()
+    for name in ifaces:
+        link = links.get(name, {})
+        data = link.get("linkinfo", {}).get("info_data") or {}
+        clock = data.get("clock")
+        btc = data.get("bittiming_const")
+        dbtc = data.get("data_bittiming_const")
+
+        print(f"=== {name} ===")
+        if not clock or not btc:
+            print("  (no bittiming constants reported — vcan or similar)")
+            print()
+            continue
+
+        lo, hi = bittiming_range(clock, btc)
+        std = [r for r in STD_NOMINAL if lo <= r <= hi]
+        print(f"  driver:    {btc.get('name', '-')}")
+        print(f"  clock:     {clock / 1_000_000:g} MHz")
+        print(f"  nominal:   {fmt_rate(lo)} .. {fmt_rate(hi)}")
+        print(f"  standard:  {', '.join(fmt_rate(r) for r in std) or '(none)'}")
+
+        if dbtc:
+            dlo, dhi = bittiming_range(clock, dbtc)
+            dstd = [r for r in STD_DATA if dlo <= r <= dhi]
+            print(f"  FD data:   {fmt_rate(dlo)} .. {fmt_rate(dhi)}")
+            print(f"  FD std:    {', '.join(fmt_rate(r) for r in dstd) or '(none)'}")
+        else:
+            print(f"  FD:        not supported")
+        print()
 
 
 def elevate_if_needed() -> None:
@@ -193,6 +249,10 @@ def main() -> int:
 
     if args.spec is None:
         show_status(ifaces)
+        return 0
+
+    if args.spec == "bitrates":
+        show_bitrates(ifaces)
         return 0
 
     try:

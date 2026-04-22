@@ -68,6 +68,7 @@ canconf 500k/2M                 CAN-FD: nominal 500k, data 2M
 canconf 500k/2M@0.875/0.75      same, with nominal & data sample points
 canconf off    |    down        bring all interfaces down
 canconf up                      bring all interfaces up (no reconfigure)
+canconf bitrates                show achievable bitrates per interface
 ```
 
 ### Options
@@ -92,13 +93,22 @@ canconf up                      bring all interfaces up (no reconfigure)
 
 ```
 ❯ canconf
-can0  UP  CAN  500k  sp 0.875
-can1  UP  CAN  500k  sp 0.875
+can0  UP  CAN  500k  sp 0.875  qlen 10000  drv gs_usb
+can1  UP  CAN  500k  sp 0.875  qlen 10000  drv gs_usb
 
 ❯ canconf 500k/2M@0.875/0.75
-[sudo] password for mickey: 
-can0  UP  CAN-FD  500k / 2M  sp 0.875/0.750
-can1  UP  CAN-FD  500k / 2M  sp 0.875/0.750
+[sudo] password for mickey:
+can0  UP  CAN-FD  500k/2M  sp 0.875/0.750  qlen 10000  drv gs_usb
+can1  UP  CAN-FD  500k/2M  sp 0.875/0.750  qlen 10000  drv gs_usb
+
+❯ canconf bitrates
+=== can0 ===
+  driver:    gs_usb
+  clock:     40 MHz
+  nominal:   202 .. 13333333
+  standard:  10k, 20k, 50k, 100k, 125k, 250k, 500k, 800k, 1M
+  FD data:   25510 .. 13333333
+  FD std:    1M, 2M, 4M, 5M, 8M
 
 ❯ canconf -n 1M -i can0
 + ip link set can0 down

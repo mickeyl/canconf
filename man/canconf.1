@@ -37,6 +37,13 @@ Bring all selected interfaces down.
 .TP
 .B up
 Bring all selected interfaces up without reconfiguring.
+.TP
+.B bitrates
+Print per\-interface introspection: driver, reference clock, achievable
+bitrate envelope (derived from
+.BR bittiming_const ),
+the standard CAN bitrates that fall within it, and \- for FD\-capable hardware
+\- the same for the data bitrate.
 .SH OPTIONS
 .TP
 .BR \-i ", " \-\-ifaces " " \fILIST\fR
