@@ -237,6 +237,11 @@ def build_type_args(spec: dict, args: argparse.Namespace) -> list[str]:
         if "dsample_point" in spec:
             t += ["dsample-point", f"{spec['dsample_point']}"]
         t += ["fd", "on"]
+    else:
+        # Classic CAN spec: explicitly disable FD so that switching from a
+        # previously-FD configuration back to classic actually takes effect.
+        # Accepted even on non-FD-capable drivers (it's the default state).
+        t += ["fd", "off"]
     if args.restart_ms is not None:
         t += ["restart-ms", str(args.restart_ms)]
     if args.listen_only:
