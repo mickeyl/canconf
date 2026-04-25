@@ -22,6 +22,8 @@ CYAN = "\033[36m"
 BRIGHT_RED = "\033[91m"
 BRIGHT_YELLOW = "\033[93m"
 
+MISSING_VALUE = "—"
+
 _use_color: bool | None = None
 
 
@@ -59,6 +61,8 @@ STATE_STYLE = {
     "SLEEPING":      (DIM,),
     "UP":            (GREEN,),
     "DOWN":          (DIM,),
+    "MISSING":       (RED, BOLD),
+    "NO-CAN-DATA":   (YELLOW,),
 }
 
 
@@ -105,6 +109,6 @@ def get_links(stats: bool = False) -> dict[str, dict]:
     cmd += ["link", "show"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     try:
-        return {l["ifname"]: l for l in json.loads(r.stdout)}
+        return {link["ifname"]: link for link in json.loads(r.stdout)}
     except (ValueError, KeyError):
         return {}

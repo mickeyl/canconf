@@ -1,4 +1,4 @@
-.TH CANMON 1 "2026-04-22" "canmon 0.3.2" "User Commands"
+.TH CANMON 1 "2026-04-25" "canmon 0.3.3" "User Commands"
 .SH NAME
 canmon \- monitor SocketCAN / CAN\-FD interface state, configuration, and bit\-error rate
 .SH SYNOPSIS
@@ -12,9 +12,10 @@ at a configurable interval and tracks the CAN error state, bitrate, and per\-sec
 error deltas.
 .PP
 By default the current state of every selected interface is printed once at
-startup and then
+startup,
 .B canmon
-stays silent, emitting a new row only when something actually changes: a state
+keeps discovering CAN interfaces that appear later, and then stays silent,
+emitting a new row only when something actually changes: a state
 transition, a bittiming change, an auto\-restart, or a tick in which the CAN
 controller bit\-error rate exceeds
 .BR \-\-err\-rate .
@@ -80,6 +81,12 @@ CAN error state:
 .BR ERROR\-PASSIVE ,
 or
 .BR BUS\-OFF .
+If a selected interface is absent from
+.BR ip (8)
+output for a poll, this column shows
+.BR MISSING .
+If the link is present but the CAN\-specific state block is absent, it shows
+.BR NO\-CAN\-DATA .
 .TP
 .B BITRATE
 Nominal bitrate, or nominal/data for CAN\-FD.
@@ -99,9 +106,9 @@ to be non\-zero at configure time).
 .TP
 .B notes
 Pipe\-separated event tags:
-.B STATE old→new
+.B STATE old → new
 on error\-state transition;
-.B CONFIG old→new
+.B CONFIG old → new
 on bittiming change;
 .B RESTART #N
 on auto\-restart;

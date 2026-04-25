@@ -10,9 +10,10 @@ Usage:
   canmon -v                        verbose: emit a row every tick
 
 Default behaviour: print the current state of every selected interface once
-at startup, then stay silent until something changes. A per-interface row is
-emitted only on a state transition, bittiming change, auto-restart, or when
-the bit-error rate exceeds the --err-rate threshold.
+at startup, keep discovering CAN interfaces that appear later, then stay
+silent until something changes. A per-interface row is emitted only on a state
+transition, bittiming change, auto-restart, or when the bit-error rate exceeds
+the --err-rate threshold.
 
 Columns:
   TIME STATE BITRATE  Δerr/s Δbus/s restarts notes
@@ -20,6 +21,9 @@ Columns:
   Δerr/s   frame-level rx+tx errors per second (driver stats64)
   Δbus/s   CAN controller bit-errors per second (info_xstats.bus_error)
   notes    state transitions, config changes, auto-restarts, threshold flags
+
+  STATE may be MISSING when a selected iface is absent from `ip link show`, or
+  NO-CAN-DATA when the link exists but `ip` does not expose CAN details.
 
 Does not require root — it only reads kernel stats.
 """
@@ -35,13 +39,20 @@ from datetime import datetime
 from . import __version__
 from . import common
 from .common import (
-    BOLD, BRIGHT_RED, CYAN, DIM, MAGENTA, RED, YELLOW,
+    BOLD, BRIGHT_RED, CYAN, DIM, MAGENTA, MISSING_VALUE, YELLOW,
     c, color_state, discover_ifaces, fmt_rate, get_links,
+)
+
+HEADER_TEXT = (
+    f"{'TIME':>8}  {'IFACE':<6}  {'STATE':<14}  {'BITRATE':<10}  "
+    f"{'Δerr/s':>6}  {'Δbus/s':>6}  {'restarts':>8}  notes"
 )
 
 
 @dataclass
 class Snapshot:
+    present: bool
+    can_data: bool
     state: str
     bitrate: int | None
     dbitrate: int | None
@@ -57,7 +68,26 @@ class Snapshot:
     bus_off: int
 
     @classmethod
-    def from_link(cls, link: dict) -> "Snapshot":
+    def from_link(cls, link: dict | None) -> "Snapshot":
+        if link is None:
+            return cls(
+                present=False,
+                can_data=False,
+                state="MISSING",
+                bitrate=None,
+                dbitrate=None,
+                sample_point=None,
+                dsample_point=None,
+                rx_errors=0,
+                tx_errors=0,
+                bus_error=0,
+                arbitration_lost=0,
+                restarts=0,
+                error_warning=0,
+                error_passive=0,
+                bus_off=0,
+            )
+
         li = link.get("linkinfo") or {}
         info_data = li.get("info_data") or {}
         xstats = li.get("info_xstats") or {}
@@ -66,8 +96,11 @@ class Snapshot:
         stats = link.get("stats64") or {}
         rx = stats.get("rx") or {}
         tx = stats.get("tx") or {}
+        can_data = "state" in info_data
         return cls(
-            state=info_data.get("state", "?"),
+            present=True,
+            can_data=can_data,
+            state=info_data.get("state", "NO-CAN-DATA"),
             bitrate=bt.get("bitrate"),
             dbitrate=dbt.get("bitrate"),
             sample_point=bt.get("sample_point"),
@@ -84,7 +117,7 @@ class Snapshot:
 
     def rate_str(self) -> str:
         if self.bitrate is None:
-            return "-"
+            return MISSING_VALUE
         r = fmt_rate(self.bitrate)
         if self.dbitrate:
             r += f"/{fmt_rate(self.dbitrate)}"
@@ -96,24 +129,35 @@ class Snapshot:
 
 def snapshot_all(ifaces: list[str]) -> dict[str, Snapshot]:
     links = get_links(stats=True)
-    return {i: Snapshot.from_link(links.get(i, {})) for i in ifaces}
+    return {i: Snapshot.from_link(links.get(i)) for i in ifaces}
+
+
+def add_discovered_ifaces(ifaces: list[str], prev: dict[str, Snapshot]) -> list[str]:
+    """Add newly discovered CAN interfaces without forgetting vanished ones."""
+    seen = set(ifaces)
+    for iface in discover_ifaces():
+        if iface not in seen:
+            ifaces.append(iface)
+            prev[iface] = Snapshot.from_link(None)
+            seen.add(iface)
+    return sorted(ifaces)
 
 
 def header() -> str:
-    return c(
-        f"{'TIME':>8}  {'IFACE':<6}  {'STATE':<14}  {'BITRATE':<10}  "
-        f"{'Δerr/s':>6}  {'Δbus/s':>6}  {'restarts':>8}  notes",
-        BOLD,
-    )
+    return f"{c(HEADER_TEXT, BOLD)}\n{separator()}"
+
+
+def separator() -> str:
+    return c("-" * len(HEADER_TEXT), DIM)
 
 
 def color_note(note: str) -> str:
     if note.startswith("STATE "):
         tail = note[len("STATE "):]
-        arrow = tail.find("→")
+        arrow = tail.find(" → ")
         if arrow != -1:
-            old, new = tail[:arrow], tail[arrow + 1:]
-            return f"STATE {color_state(old)}→{color_state(new)}"
+            old, new = tail[:arrow], tail[arrow + 3:]
+            return f"STATE {color_state(old)} → {color_state(new)}"
         return c(note, MAGENTA)
     if note.startswith("CONFIG "):
         return c(note, MAGENTA)
@@ -131,6 +175,16 @@ def color_rate_delta(per_s: float, flagged: bool) -> str:
     if per_s > 0:
         return c(cell, YELLOW)
     return cell
+
+
+def counter_rates(p: Snapshot, n: Snapshot, interval: float) -> tuple[float, float]:
+    if not p.present or not n.present:
+        return 0.0, 0.0
+    d_err = (n.rx_errors - p.rx_errors) + (n.tx_errors - p.tx_errors)
+    d_bus = n.bus_error - p.bus_error
+    if d_err < 0 or d_bus < 0:
+        return 0.0, 0.0
+    return d_err / interval, d_bus / interval
 
 
 def fmt_row(ts: str, iface: str, n: Snapshot, err_per_s: float,
@@ -178,11 +232,12 @@ def main() -> int:
         print(f"canmon {__version__}")
         return 0
 
+    auto_discover = not args.ifaces
     if args.ifaces:
         ifaces = [x.strip() for x in args.ifaces.split(",") if x.strip()]
     else:
         ifaces = discover_ifaces()
-    if not ifaces:
+    if not ifaces and args.once:
         print("canmon: no CAN interfaces found (pass --ifaces to override)", file=sys.stderr)
         return 1
 
@@ -191,9 +246,13 @@ def main() -> int:
     # Initial snapshot: always printed, so the user sees what is being monitored.
     prev = snapshot_all(ifaces)
     print(header())
-    ts = datetime.now().strftime("%H:%M:%S")
+    now_dt = datetime.now()
+    ts = now_dt.strftime("%H:%M:%S")
     for iface in ifaces:
         print(fmt_row(ts, iface, prev[iface], 0.0, 0.0, flagged=False, notes=[]))
+    last_output_date = now_dt.date() if ifaces else None
+    if not ifaces:
+        print("canmon: no CAN interfaces found yet; waiting...", file=sys.stderr)
     sys.stdout.flush()
 
     if args.once:
@@ -201,31 +260,35 @@ def main() -> int:
 
     while True:
         time.sleep(args.rate)
+        if auto_discover:
+            ifaces = add_discovered_ifaces(ifaces, prev)
         now = snapshot_all(ifaces)
-        ts = datetime.now().strftime("%H:%M:%S")
+        now_dt = datetime.now()
+        ts = now_dt.strftime("%H:%M:%S")
+        today = now_dt.date()
         for iface in ifaces:
             p = prev[iface]
             n = now[iface]
 
             notes = []
             if p.state != n.state:
-                notes.append(f"STATE {p.state}→{n.state}")
+                notes.append(f"STATE {p.state} → {n.state}")
             if p.bittiming_key() != n.bittiming_key():
-                notes.append(f"CONFIG {p.rate_str()}→{n.rate_str()}")
+                notes.append(f"CONFIG {p.rate_str()} → {n.rate_str()}")
             if n.restarts > p.restarts:
                 notes.append(f"RESTART #{n.restarts}")
 
-            d_err = (n.rx_errors - p.rx_errors) + (n.tx_errors - p.tx_errors)
-            d_bus = n.bus_error - p.bus_error
-            err_per_s = d_err / args.rate
-            bus_per_s = d_bus / args.rate
+            err_per_s, bus_per_s = counter_rates(p, n, args.rate)
 
             flagged = bus_per_s > args.err_rate
             if flagged:
                 notes.append(f"BIT-ERRORS {bus_per_s:.0f}/s > {args.err_rate:.0f}/s")
 
             if args.verbose or notes:
+                if last_output_date is not None and today != last_output_date:
+                    print(separator())
                 print(fmt_row(ts, iface, n, err_per_s, bus_per_s, flagged, notes))
+                last_output_date = today
 
         prev = now
         sys.stdout.flush()

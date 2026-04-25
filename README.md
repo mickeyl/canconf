@@ -170,11 +170,12 @@ can1  UP  CAN-FD  500k/2M  sp 0.875/0.750  qlen 10000  drv gs_usb
 ## canmon
 
 `canmon` tails every CAN interface at 1 Hz (tunable). It prints the current
-state once at startup and then **stays silent**, emitting a new row only when
-something actually changes: a state transition, a bittiming change, an
-auto-restart, or a tick in which the CAN controller bit-error rate exceeds a
-threshold. It needs no root and reads only from `ip -j -details -s link show`
-plus `/sys/class/net` — no CAN traffic is injected, intercepted, or generated.
+state once at startup, keeps discovering CAN interfaces that appear later, and
+then **stays silent**, emitting a new row only when something actually changes:
+a state transition, a bittiming change, an auto-restart, or a tick in which the
+CAN controller bit-error rate exceeds a threshold. It needs no root and reads
+only from `ip -j -details -s link show` plus `/sys/class/net` — no CAN traffic
+is injected, intercepted, or generated.
 
 ![canmon screenshot showing state transitions and config changes in colour](assets/canmon.png)
 
@@ -199,7 +200,14 @@ every tick.
 - **Δerr/s** — frame-level `rx+tx` error delta per second (from driver `stats64`).
 - **Δbus/s** — CAN controller bit-error delta per second (from `info_xstats.bus_error`). The number you probably care about most during ECU flashes, cable swaps, or suspect wiring.
 - **restarts** — running total of driver-initiated auto-restarts after bus-off (requires `canconf … -r MS` to be non-zero at configure time).
-- **notes** — event tags: `STATE a→b`, `CONFIG a→b`, `RESTART #N`, `BIT-ERRORS N/s > T/s`. In a colour-capable terminal each tag is coloured by severity, and state tokens are rendered in the same colour as the state column so bus-off transitions jump out.
+- **notes** — event tags: `STATE a → b`, `CONFIG a → b`, `RESTART #N`, `BIT-ERRORS N/s > T/s`. In a colour-capable terminal each tag is coloured by severity, and state tokens are rendered in the same colour as the state column so bus-off transitions jump out.
+
+In default auto-discovery mode, interfaces that appear after startup are added
+to the watch list. If a watched interface disappears between ticks, `canmon`
+reports state `MISSING` and bitrate `—`. This usually means the netdev vanished
+from `ip link show` for that poll, as can happen during USB adapter
+re-enumeration or suspend/resume. If the netdev is present but `ip` does not
+expose the CAN-specific state block, `canmon` reports `NO-CAN-DATA` instead.
 
 ## Roadmap
 
@@ -229,7 +237,7 @@ Contributions welcome; open an issue first if it's non-trivial.
 - **`canfind`** — map `canX` interfaces back to the physical adapter: USB
   VID:PID, serial number, USB port path, product string. Indispensable when
   four identical USB-CAN dongles are plugged in.
-- **`cansync`** — one-shot synchronised down→configure→up across interfaces,
+- **`cansync`** — one-shot synchronised down → configure → up across interfaces,
   with an optional `--at <time>` for lab rigs that need deterministic startup.
 - **Daemon mode for `canmon`** — long-running process that emits to
   syslog/journald (for ops use) and exposes a Prometheus text-format

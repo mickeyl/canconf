@@ -38,7 +38,7 @@ import sys
 from . import __version__
 from . import common
 from .common import (
-    BOLD, CYAN, DIM, MAGENTA,
+    BOLD, CYAN, DIM, MAGENTA, MISSING_VALUE,
     c, color_state, discover_ifaces, fmt_rate, get_links,
 )
 
@@ -124,14 +124,14 @@ def show_status(ifaces: list[str]) -> None:
         data = link.get("linkinfo", {}).get("info_data", {}) or {}
         bt = data.get("bittiming") or {}
         dbt = data.get("data_bittiming")
-        driver = (data.get("bittiming_const") or {}).get("name") or "-"
+        driver = (data.get("bittiming_const") or {}).get("name") or MISSING_VALUE
         mode = "CAN-FD" if dbt else "CAN"
         if bt.get("bitrate"):
             rate = fmt_rate(bt["bitrate"])
             if dbt and dbt.get("bitrate"):
                 rate += f"/{fmt_rate(dbt['bitrate'])}"
         else:
-            rate = "-"
+            rate = MISSING_VALUE
         sp = bt.get("sample_point")
         dsp = (dbt or {}).get("sample_point")
         if sp and dsp:
@@ -139,8 +139,8 @@ def show_status(ifaces: list[str]) -> None:
         elif sp:
             sp_col = str(sp)
         else:
-            sp_col = "-"
-        qlen_col = str(qlen) if qlen is not None else "-"
+            sp_col = MISSING_VALUE
+        qlen_col = str(qlen) if qlen is not None else MISSING_VALUE
         rows.append((name, state, mode, rate, sp_col, qlen_col, driver))
 
     cols = list(zip(*rows))
@@ -200,7 +200,7 @@ def show_bitrates(ifaces: list[str]) -> None:
             print(f"  FD data:   {fmt_rate(dlo)} .. {fmt_rate(dhi)}")
             print(f"  FD std:    {', '.join(fmt_rate(r) for r in dstd) or '(none)'}")
         else:
-            print(f"  FD:        not supported")
+            print("  FD:        not supported")
         print()
 
 
