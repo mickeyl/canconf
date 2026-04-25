@@ -60,6 +60,7 @@ test:
 	$(RUN_PY) -m $(PKG) -n 500k/2M@0.875/0.75 -i vcan0 >/dev/null
 	$(RUN_PY) -m $(PKG) -n off -i vcan0 >/dev/null
 	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.argv=['canmon','--help']; sys.exit(main())" >/dev/null
+	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.argv=['canmon','--once','-i','vcan0']; sys.exit(main())" >/dev/null
 	@echo "ok"
 
 # --- quality -----------------------------------------------------------------

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "canconf"
-version = "0.3.3"
+version = "0.3.4"
 description = "One-shot reconfiguration and live monitoring of SocketCAN / CAN-FD interfaces"
 readme = "README.md"
 license = "MIT"

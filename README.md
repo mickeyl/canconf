@@ -200,7 +200,7 @@ every tick.
 - **Δerr/s** — frame-level `rx+tx` error delta per second (from driver `stats64`).
 - **Δbus/s** — CAN controller bit-error delta per second (from `info_xstats.bus_error`). The number you probably care about most during ECU flashes, cable swaps, or suspect wiring.
 - **restarts** — running total of driver-initiated auto-restarts after bus-off (requires `canconf … -r MS` to be non-zero at configure time).
-- **notes** — event tags: `STATE a → b`, `CONFIG a → b`, `RESTART #N`, `BIT-ERRORS N/s > T/s`. In a colour-capable terminal each tag is coloured by severity, and state tokens are rendered in the same colour as the state column so bus-off transitions jump out.
+- **notes** — event tags: `STATE a → b`, `CONFIG a → b`, `RESTART #N`, `BIT-ERRORS N/s > T/s`. Initial rows also include static details such as `sp`, `qlen`, and `drv` when the driver exposes them. In a colour-capable terminal each tag is coloured by severity, and state tokens are rendered in the same colour as the state column so bus-off transitions jump out.
 
 In default auto-discovery mode, interfaces that appear after startup are added
 to the watch list. If a watched interface disappears between ticks, `canmon`

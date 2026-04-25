@@ -58,6 +58,8 @@ class Snapshot:
     dbitrate: int | None
     sample_point: str | None
     dsample_point: str | None
+    txqlen: int | None
+    driver: str | None
     rx_errors: int
     tx_errors: int
     bus_error: int
@@ -78,6 +80,8 @@ class Snapshot:
                 dbitrate=None,
                 sample_point=None,
                 dsample_point=None,
+                txqlen=None,
+                driver=None,
                 rx_errors=0,
                 tx_errors=0,
                 bus_error=0,
@@ -105,6 +109,8 @@ class Snapshot:
             dbitrate=dbt.get("bitrate"),
             sample_point=bt.get("sample_point"),
             dsample_point=dbt.get("sample_point"),
+            txqlen=link.get("txqlen"),
+            driver=(info_data.get("bittiming_const") or {}).get("name"),
             rx_errors=rx.get("errors", 0),
             tx_errors=tx.get("errors", 0),
             bus_error=xstats.get("bus_error", 0),
@@ -187,6 +193,19 @@ def counter_rates(p: Snapshot, n: Snapshot, interval: float) -> tuple[float, flo
     return d_err / interval, d_bus / interval
 
 
+def initial_notes(n: Snapshot) -> list[str]:
+    notes = []
+    if n.sample_point and n.dsample_point:
+        notes.append(f"sp {n.sample_point}/{n.dsample_point}")
+    elif n.sample_point:
+        notes.append(f"sp {n.sample_point}")
+    if n.txqlen is not None:
+        notes.append(f"qlen {n.txqlen}")
+    if n.driver:
+        notes.append(f"drv {n.driver}")
+    return notes
+
+
 def fmt_row(ts: str, iface: str, n: Snapshot, err_per_s: float,
             bus_per_s: float, flagged: bool, notes: list[str]) -> str:
     flag = c("!", BRIGHT_RED, BOLD) if flagged else " "
@@ -249,7 +268,8 @@ def main() -> int:
     now_dt = datetime.now()
     ts = now_dt.strftime("%H:%M:%S")
     for iface in ifaces:
-        print(fmt_row(ts, iface, prev[iface], 0.0, 0.0, flagged=False, notes=[]))
+        print(fmt_row(ts, iface, prev[iface], 0.0, 0.0, flagged=False,
+                      notes=initial_notes(prev[iface])))
     last_output_date = now_dt.date() if ifaces else None
     if not ifaces:
         print("canmon: no CAN interfaces found yet; waiting...", file=sys.stderr)
@@ -275,6 +295,8 @@ def main() -> int:
                 notes.append(f"STATE {p.state} → {n.state}")
             if p.bittiming_key() != n.bittiming_key():
                 notes.append(f"CONFIG {p.rate_str()} → {n.rate_str()}")
+            if not p.present and n.present:
+                notes.extend(initial_notes(n))
             if n.restarts > p.restarts:
                 notes.append(f"RESTART #{n.restarts}")
 

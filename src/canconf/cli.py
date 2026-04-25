@@ -38,8 +38,7 @@ import sys
 from . import __version__
 from . import common
 from .common import (
-    BOLD, CYAN, DIM, MAGENTA, MISSING_VALUE,
-    c, color_state, discover_ifaces, fmt_rate, get_links,
+    c, discover_ifaces, fmt_rate, get_links, status_lines,
 )
 
 DEFAULT_TXQUEUELEN = 10000
@@ -111,52 +110,7 @@ def run(cmd: list[str], *, dry: bool, verbose: bool) -> bool:
 
 
 def show_status(ifaces: list[str]) -> None:
-    if not ifaces:
-        print("no CAN interfaces found")
-        return
-    links = get_links()
-
-    rows = []
-    for name in ifaces:
-        link = links.get(name, {})
-        state = link.get("operstate", "?")
-        qlen = link.get("txqlen")
-        data = link.get("linkinfo", {}).get("info_data", {}) or {}
-        bt = data.get("bittiming") or {}
-        dbt = data.get("data_bittiming")
-        driver = (data.get("bittiming_const") or {}).get("name") or MISSING_VALUE
-        mode = "CAN-FD" if dbt else "CAN"
-        if bt.get("bitrate"):
-            rate = fmt_rate(bt["bitrate"])
-            if dbt and dbt.get("bitrate"):
-                rate += f"/{fmt_rate(dbt['bitrate'])}"
-        else:
-            rate = MISSING_VALUE
-        sp = bt.get("sample_point")
-        dsp = (dbt or {}).get("sample_point")
-        if sp and dsp:
-            sp_col = f"{sp}/{dsp}"
-        elif sp:
-            sp_col = str(sp)
-        else:
-            sp_col = MISSING_VALUE
-        qlen_col = str(qlen) if qlen is not None else MISSING_VALUE
-        rows.append((name, state, mode, rate, sp_col, qlen_col, driver))
-
-    cols = list(zip(*rows))
-    w = [max(len(col_val) for col_val in col) for col in cols]
-    for name, state, mode, rate, sp_col, qlen_col, driver in rows:
-        mode_colored = c(mode, MAGENTA) if mode == "CAN-FD" else c(mode, CYAN)
-        # color_state pads internally so w[1] is still the correct visual width
-        print(
-            f"{c(name, BOLD):<{w[0] + len(c('', BOLD))}}"
-            f"  {color_state(state, w[1])}"
-            f"  {mode_colored + ' ' * (w[2] - len(mode))}"
-            f"  {rate:<{w[3]}}"
-            f"  {c('sp', DIM)} {sp_col:<{w[4]}}"
-            f"  {c('qlen', DIM)} {qlen_col:<{w[5]}}"
-            f"  {c('drv', DIM)} {c(driver, CYAN)}"
-        )
+    print("\n".join(status_lines(ifaces)))
 
 
 def bittiming_range(clock: int, const: dict) -> tuple[int, int]:
