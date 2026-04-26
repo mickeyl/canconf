@@ -1,6 +1,6 @@
-# canconf / canmon
+# canconf / canmon / cantalk
 
-Two small, single-purpose tools for people who spend their day staring at CAN
+Three small, single-purpose tools for people who spend their day staring at CAN
 buses on Linux:
 
 - **`canconf`** — reconfigure every SocketCAN / CAN-FD interface in one terse
@@ -8,9 +8,12 @@ buses on Linux:
 - **`canmon`** — passive, read-only health monitor: state transitions,
   configuration changes, auto-restarts, and bit-error bursts — printed only
   when something actually happens.
+- **`cantalk`** — tiny REPL for talking to an ECU: set an arbitration pair,
+  type hex bytes, see the reply. ISOTP by default (kernel handles flow control
+  and reassembly); `--raw` for plain CAN frames.
 
-Both are pure Python 3.9+ stdlib, zero runtime dependencies, installable as a
-single `pipx install canconf` and immediately useful.
+All three are pure Python 3.9+ stdlib, zero runtime dependencies, installable
+as a single `pipx install canconf` and immediately useful.
 
 ## Why this exists
 
@@ -43,8 +46,8 @@ that keep the plumbing out of your way.
 
 ### pipx — recommended
 
-Installs the two binaries into an isolated venv and puts `canconf` and `canmon`
-on your `PATH`:
+Installs the binaries into an isolated venv and puts `canconf`, `canmon`, and
+`cantalk` on your `PATH`:
 
 ```bash
 pipx install canconf
@@ -65,7 +68,9 @@ pipx install .      # or: pip install -e .
 ```
 
 No runtime deps. Needs only `iproute2` (you already have it) and `sudo`
-(`canconf` self-elevates; `canmon` stays non-privileged).
+(`canconf` self-elevates; `canmon` stays non-privileged; `cantalk` needs
+`CAP_NET_RAW` or root). For ISOTP, `cantalk` relies on the in-tree
+`can-isotp` kernel module (mainline since 5.10).
 
 ## canconf
 
@@ -208,6 +213,73 @@ reports state `MISSING` and bitrate `—`. This usually means the netdev vanishe
 from `ip link show` for that poll, as can happen during USB adapter
 re-enumeration or suspend/resume. If the netdev is present but `ip` does not
 expose the CAN-specific state block, `canmon` reports `NO-CAN-DATA` instead.
+
+## cantalk
+
+A minimal interactive CAN terminal. Set an arbitration pair, type hex,
+see the reply. The interaction model deliberately mirrors the
+`ecuconnect-tool term` REPL from Swift-CANyonero. On a TTY the prompt is
+anchored to the bottom of the terminal in a fixed three-line frame
+(top info rule, input line, bottom hint rule) and the request/response
+log scrolls independently above it:
+
+```
+  · iface=can0  mode=isotp  tx=7E0  rx=7E8  timeout=2s  pad=0xAA
+  → 7E0  10 03
+  ← 7E8  50 03 00 32 01 F4
+          ->  P..2..
+          ℹ︎  ✓ positive response to Diagnostic Session Control
+  → 7E0  22 F1 90
+  ← 7E8  62 F1 90 57 56 57 5A 5A 5A 31 4B 5A 31 47 30 30 30 30 30 31
+          ->  b..WVWZZZ1KZ1G000001
+          ℹ︎  ✓ positive response to Read Data By Identifier
+
+──  can0 · isotp · 7E0 → 7E8 · pad=0xAA · timeout=2s  ──────────────────
+❯ _
+──  :help · ↑↓ history · Ctrl-C exit  ──────────────────────────────────
+```
+
+The arbitration pair is remembered per interface across runs (saved to
+`$XDG_STATE_HOME/cantalk/state.json`); next time you `cantalk can0` the
+last-used `tx`/`rx` are restored automatically.
+
+Pipe stdin or pass `--plain` for a one-prompt-per-line REPL without
+the scroll region (e.g. for scripted use).
+
+### Modes
+
+- **ISOTP (default).** Kernel `can-isotp` module handles segmentation, flow
+  control (FC), and reassembly. Payloads up to 4095 bytes; you only ever
+  see complete messages.
+- **`--raw`.** A bare `AF_CAN` raw socket. Each typed payload becomes one
+  classic CAN frame (≤ 8 bytes). The reply window collects every matching
+  frame seen until 250 ms of silence — useful for snooping or talking to
+  ECUs that don't speak ISOTP.
+
+### REPL grammar
+
+| Input | What it does |
+|------|--------------|
+| `:7DF`                  | Set TX. RX is auto-derived (TX+8 for 11-bit IDs; J1939-style source/target swap for `18DA<target><source>`). |
+| `:7DF,7E8`              | Set TX and RX explicitly. |
+| `:18DA10F1,18DAF110`    | 29-bit extended addressing. |
+| `:info` / `:help`       | Show state / show commands. |
+| `0902`, `09 02`, `09:02`| Send hex bytes. Whitespace, `:`, `,` are separators. |
+| `quit` / Ctrl-C / Ctrl-D | Exit. |
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--raw`                  | Use raw CAN sockets instead of ISOTP. |
+| `-t`, `--timeout SEC`    | Response timeout (default: 2.0). Raw mode keeps listening for 250 ms after each received frame. |
+| `-p`, `--pad HEX`        | Pad every CAN frame to 8 bytes (default: `AA`; `none` to disable). Applies in both ISOTP and raw modes. |
+| `--plain`                | Disable the bottom-anchored TUI; one prompt per line. |
+| `--no-color`             | Disable ANSI colour. |
+| `-V`, `--version`        | Print version. |
+| `-h`, `--help`           | Show help. |
+
+The interface must already be up — that's `canconf`'s job.
 
 ## Roadmap
 

@@ -12,8 +12,8 @@ MANDIR    ?= $(PREFIX)/share/man
 VERSION   := $(shell grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 
 .PHONY: all help build install install-editable uninstall reinstall \
-        run status monitor dry test check fmt lint clean distclean \
-        vcan vcanfd vcan-down man man-canmon release publish
+        run status monitor talk dry test check fmt lint clean distclean \
+        vcan vcanfd vcan-down man man-canmon man-cantalk release publish
 
 all: help
 
@@ -26,13 +26,14 @@ install:
 	$(PIPX) install --force .
 	install -Dm644 man/canconf.1 $(MANDIR)/man1/canconf.1
 	install -Dm644 man/canmon.1  $(MANDIR)/man1/canmon.1
+	install -Dm644 man/cantalk.1 $(MANDIR)/man1/cantalk.1
 
 install-editable:
 	$(PIPX) install --force --editable .
 
 uninstall:
 	-$(PIPX) uninstall $(PKG)
-	rm -f $(MANDIR)/man1/canconf.1 $(MANDIR)/man1/canmon.1
+	rm -f $(MANDIR)/man1/canconf.1 $(MANDIR)/man1/canmon.1 $(MANDIR)/man1/cantalk.1
 
 reinstall: uninstall install
 
@@ -45,6 +46,15 @@ status:
 # Monitor all CAN interfaces from a source checkout.
 monitor:
 	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.exit(main())"
+
+# Open the cantalk REPL from a source checkout. Override IFACE / ARB / RAW.
+# Example: make talk IFACE=vcan0 ARB=7DF,7E8
+# Example: make talk IFACE=vcan0 ARB=7DF RAW=1
+IFACE ?=
+ARB   ?=
+RAW   ?=
+talk:
+	$(RUN_PY) -m canconf.cantalk $(IFACE) $(ARB) $(if $(RAW),--raw)
 
 # Dry-run a full reconfigure; override SPEC / IFACES on the command line.
 SPEC   ?= 500k/2M@0.875/0.75
@@ -61,6 +71,13 @@ test:
 	$(RUN_PY) -m $(PKG) -n off -i vcan0 >/dev/null
 	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.argv=['canmon','--help']; sys.exit(main())" >/dev/null
 	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.argv=['canmon','--once','-i','vcan0']; sys.exit(main())" >/dev/null
+	$(RUN_PY) -m canconf.cantalk --help >/dev/null
+	$(RUN_PY) -m canconf.cantalk --version >/dev/null
+	$(RUN_PY) -c "from canconf import cantalk as t; \
+		assert t.parse_hex('0902') == bytes([9,2]); \
+		assert t.parse_id('7DF') == 0x7DF; \
+		assert t.derive_rx(0x7E0) == 0x7E8; \
+		assert t.derive_rx(0x18DA10F1) == 0x18DAF110"
 	@echo "ok"
 
 # --- quality -----------------------------------------------------------------
@@ -98,6 +115,9 @@ man:
 
 man-canmon:
 	@man ./man/canmon.1
+
+man-cantalk:
+	@man ./man/cantalk.1
 
 # --- release -----------------------------------------------------------------
 
@@ -143,6 +163,7 @@ help:
 	@echo "Run / test:"
 	@echo "  status             show current CAN interface status (canconf)"
 	@echo "  monitor            live CAN health monitor (canmon)"
+	@echo "  talk IFACE=can0    open the cantalk REPL on IFACE (ARB=7DF,7E8 RAW=1 optional)"
 	@echo "  dry SPEC=500k/2M   dry-run a reconfigure"
 	@echo "  test               run quick self-tests"
 	@echo "  check              python -m compileall"
@@ -156,6 +177,7 @@ help:
 	@echo "Docs:"
 	@echo "  man                view canconf(1)"
 	@echo "  man-canmon         view canmon(1)"
+	@echo "  man-cantalk        view cantalk(1)"
 	@echo ""
 	@echo "Release:"
 	@echo "  release            tag v\$$VERSION and push"

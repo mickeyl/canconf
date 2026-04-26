@@ -1,0 +1,195 @@
+.TH CANTALK 1 "2026-04-26" "cantalk 0.4.0" "User Commands"
+.SH NAME
+cantalk \- tiny REPL for sending and receiving CAN messages over SocketCAN
+.SH SYNOPSIS
+.B cantalk
+.RI [ OPTIONS ]
+.I IFACE
+.RI [ ARBITRATION ]
+.SH DESCRIPTION
+.B cantalk
+opens a CAN socket on
+.I IFACE
+and exposes a small interactive prompt for setting an arbitration pair
+.RI ( tx / rx )
+and exchanging hex payloads with an ECU. By default it speaks ISOTP (ISO 15765\-2)
+via the kernel
+.B can\-isotp
+module \- segmentation, flow control, and reassembly are handled transparently.
+With
+.B \-\-raw
+each typed payload becomes a single classic CAN frame and any matching frames
+seen during the response window are printed.
+.PP
+On a TTY the prompt is anchored to the bottom of the terminal in a
+three-line frame: a top rule with iface, mode, arbitration, padding, and
+timeout; the input line carrying the
+.B \(rA
+prompt; and a bottom rule with hints (\fB:help\fR, \fB\(ua\(da\fR history,
+\fBCtrl-C\fR exit). The request/response log scrolls independently above
+this frame. Pass
+.B \-\-plain
+(or pipe stdin) to fall back to a one-prompt-per-line REPL without the
+scroll region.
+.PP
+The last arbitration pair set during a session is persisted per interface
+to
+.I $XDG_STATE_HOME/cantalk/state.json
+and automatically restored next time
+.B cantalk
+opens that interface without an explicit arbitration argument. CLI
+arguments always override the saved value.
+.PP
+The interaction model intentionally mirrors
+.B ecuconnect\-tool term
+from Swift\-CANyonero: a single colon prefix to set arbitration, bare hex to send,
+.BR quit / Ctrl\-C / Ctrl\-D
+to exit.
+.SH ARGUMENTS
+.TP
+.I IFACE
+The CAN interface to use, e.g.
+.BR can0 ", " vcan0 ". "
+The interface must already be configured and up; use
+.BR canconf (1)
+for that.
+.TP
+.I ARBITRATION
+Optional pre\-set arbitration:
+.B TX
+or
+.BR TX,RX .
+If only TX is given (and the mode is ISOTP), RX is auto\-derived: TX+8 for
+11\-bit IDs, source/target swap for 29\-bit
+.B 18DA<target><source>
+J1939\-style physical addressing.
+.SH REPL COMMANDS
+.TP
+.B :TX
+Set TX, derive RX (ISOTP only).
+.TP
+.B :TX,RX
+Set TX and RX explicitly. Hex; 11\-bit if value \(<= 0x7FF, else 29\-bit.
+.TP
+.B :info
+Show interface, mode, arbitration, timeout.
+.TP
+.B :help
+Show the in\-REPL command list.
+.TP
+.B HEX...
+Bare hex bytes \- spaces, ":" and "," are ignored. Sends one ISOTP message
+or one raw CAN frame.
+.TP
+.B quit
+Exit. Ctrl\-D works too.
+.SH OPTIONS
+.TP
+.B \-\-raw
+Use raw CAN sockets instead of ISOTP. Each payload is sent as a single
+8\-byte CAN frame; longer payloads are rejected.
+.TP
+.BR \-t ", " \-\-timeout " " \fISECONDS\fR
+Response timeout. Default: 2.0. In raw mode the deadline is extended by 250 ms
+after each received frame so multi\-frame replies on the same bus are caught.
+.TP
+.BR \-p ", " \-\-pad " " \fIHEX\fR
+Pad every CAN frame to 8 bytes with this byte. Default:
+.BR AA
+(common ECU expectation). Pass
+.B none
+to disable padding (kernel/driver default). Applies in both ISOTP and
+raw modes; in ISOTP mode it sets
+.B txpad_content
+and
+.B rxpad_content
+on the kernel
+.BR can\-isotp
+socket. The legacy long form
+.B \-\-padding
+is still accepted.
+.TP
+.B \-\-plain
+Disable the bottom-anchored TUI; use a simple line-by-line REPL instead.
+The TUI is automatically disabled when stdin or stdout isn't a TTY, or when
+.B TERM
+is unset or
+.BR dumb .
+.TP
+.B \-\-no\-color
+Disable ANSI colour. Also respects
+.B NO_COLOR
+and
+.BR FORCE_COLOR .
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.TP
+.BR \-h ", " \-\-help
+Show help and exit.
+.SH EXIT STATUS
+.TP
+.B 0
+Clean exit (quit / Ctrl\-D).
+.TP
+.B 1
+Cannot bind to the requested interface (e.g. interface down, missing privileges).
+.TP
+.B 2
+Bad command\-line argument (no
+.IR IFACE ,
+malformed arbitration, bad padding).
+.SH PRIVILEGES
+Opening AF_CAN sockets requires
+.B CAP_NET_RAW
+or root. Unlike
+.BR canconf (1),
+.B cantalk
+does not self\-elevate; run it under
+.BR sudo (8)
+or grant the binary
+.B CAP_NET_RAW
+out\-of\-band if you prefer.
+.SH FILES
+.TP
+.IR $XDG_STATE_HOME/cantalk/history " (default " ~/.local/state/cantalk/history ")"
+Plain text command history, capped at 1000 lines.
+.TP
+.IR $XDG_STATE_HOME/cantalk/state.json " (default " ~/.local/state/cantalk/state.json ")"
+Per-interface arbitration: a JSON object keyed by iface name, each value
+having
+.B tx
+and
+.B rx
+hex strings. Updated on exit when an arbitration was set during the
+session.
+.SH EXAMPLES
+.TP
+Open an ISOTP REPL on can0 and ask the engine ECU for its VIN:
+.EX
+$ cantalk can0 7E0,7E8
+> 0902
+.EE
+.TP
+Raw\-CAN REPL on vcan0, accept all reply IDs, 500 ms response window:
+.EX
+$ cantalk vcan0 7DF --raw -t 0.5
+.EE
+.TP
+Override the default 0xAA padding with 0xCC (common on VAG/Bosch ECUs):
+.EX
+$ cantalk can0 7E0,7E8 -p CC
+.EE
+.TP
+Disable padding entirely (DLC reflects actual payload length):
+.EX
+$ cantalk can0 7E0,7E8 --pad none
+.EE
+.SH SEE ALSO
+.BR canconf (1),
+.BR canmon (1),
+.BR ip\-link (8),
+.BR candump (1),
+.BR cansend (1)
+.SH AUTHOR
+Dr. Michael Lauer <mickey@vanille-media.de>

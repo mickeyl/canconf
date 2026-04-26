@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A two-tool package for Linux SocketCAN admins:
+A three-tool package for Linux SocketCAN admins:
 
 - **`canconf`** — one-shot reconfigurator for CAN / CAN-FD interfaces. Replaces the long, order-sensitive `ip link set ...` dance with a single terse command like `canconf 500k/2M@0.875/0.75`. Its niche: hosts with two or more CAN interfaces on the same bus that must be configured identically.
 - **`canmon`** — read-only live monitor. Tails state, bittiming, frame-error deltas, and controller bit-error deltas per interface per tick; flags state transitions, config changes, auto-restarts, and threshold breaches.
+- **`cantalk`** — minimal interactive REPL for talking to an ECU. Default mode is ISOTP via the kernel `can-isotp` module (segmentation/flow-control transparent); `--raw` drops to single CAN frames. The interaction model mirrors `ecuconnect-tool term` from Swift-CANyonero — `:TX[,RX]` to set arbitration, bare hex to send, `quit` / Ctrl-D to exit.
 
 Pure Python 3.9+ stdlib — no runtime dependencies. Distributed on PyPI, meant to be installed via `pipx`.
 
@@ -32,13 +33,14 @@ Testing against real hardware needs root; `canconf` self-elevates via `sudo -- p
 
 ## Architecture
 
-Three modules under `src/canconf/`:
+Four modules under `src/canconf/`:
 
-- `common.py` — `discover_ifaces()` (scans `/sys/class/net/*/type` for ARPHRD_CAN = 280), `fmt_rate()` (500000→"500k"), `get_links(stats=False)` (wraps `ip -j -details [-s] link show`, returns `{ifname: dict}`). Shared by both tools.
+- `common.py` — `discover_ifaces()` (scans `/sys/class/net/*/type` for ARPHRD_CAN = 280), `fmt_rate()` (500000→"500k"), `get_links(stats=False)` (wraps `ip -j -details [-s] link show`, returns `{ifname: dict}`), and the shared ANSI-colour helpers. Shared by all three tools.
 - `cli.py` — `canconf` entry point.
 - `monitor.py` — `canmon` entry point.
+- `cantalk.py` — `cantalk` entry point. Talks to the kernel directly via `socket.AF_CAN` (no `ip` shell-out, no extra deps); imports `readline` for history if available.
 
-`__init__.py` exports `__version__`; `__main__.py` makes `python -m canconf` run the reconfigurator. `canmon` is exposed only via the pyproject entry point (no `python -m canmon`).
+`__init__.py` exports `__version__`; `__main__.py` makes `python -m canconf` run the reconfigurator. `canmon` is exposed only via the pyproject entry point (no `python -m canmon`); `cantalk` can be invoked as `python -m canconf.cantalk` for source-tree testing.
 
 **canconf pipeline per run:**
 
@@ -60,6 +62,13 @@ Three modules under `src/canconf/`:
 2. Compare against the previous tick: detect state transition, bittiming change, restart-count increase, and compute `Δerr/s` and `Δbus/s`.
 3. At startup: emit the header and one row per iface (initial snapshot). Subsequent ticks: emit a row only for ifaces where *something* changed (state/bittiming/restart count) or the `Δbus/s` threshold was crossed. `--verbose` overrides this and emits every iface every tick. `--once` prints only the startup snapshot and exits.
 
+**cantalk pipeline:**
+
+1. Open a CAN socket on the requested iface. ISOTP (`SOCK_DGRAM`, `CAN_ISOTP=6`) by default; raw (`SOCK_RAW`, `CAN_RAW=1`) under `--raw`. Constants are inlined as `int`s (`CAN_ISOTP=6`, `CAN_EFF_FLAG=0x80000000`, …) so the module imports cleanly even on Python builds where `socket.CAN_ISOTP` isn't exposed.
+2. The Python ISOTP `bind()` tuple is `(iface, rx_id, tx_id)` — the order matters and is documented in CPython's `socketmodule.c`. 29-bit IDs need `CAN_EFF_FLAG` ORed into both id values at bind time.
+3. The REPL accepts `:TX[,RX]` to (re)bind the socket and bare hex to send. ISOTP send/recv is one full message at a time; raw send is one ≤ 8-byte frame, and the recv loop keeps the deadline open for 250 ms after each received frame so multi-frame replies on the same bus aren't truncated.
+4. The colour-aware prompt brackets ANSI escape codes with `\001`/`\002` so GNU readline computes prompt width correctly. The brackets are only emitted when `readline` is actually loaded — a missing readline degrades to plain ANSI without corrupting line editing on systems without it.
+
 **Key design choices:**
 
 - No pattern-matching on interface names — rely on ARPHRD_CAN so exotic transports (slcan, usb-based gs_can, …) are picked up automatically.
@@ -69,6 +78,8 @@ Three modules under `src/canconf/`:
 - `canmon` measures bit-errors via `info_xstats.bus_error` (monotonic counter maintained by the driver), **not** via the live `berr-counter` TEC/REC (which oscillates and resets). This makes delta-per-second meaningful and makes the tool work without `berr-reporting on` at configure time.
 - `canmon` does not open a CAN socket; it only polls `ip`/sysfs. Zero bus impact, zero need for root.
 - Bitrates under `MIN_BITRATE` (10 kbit/s) are rejected at parse time as probable typos (`canconf 800` → `canconf 800k`). Real low-speed CAN below that is rare enough that the safety check wins; if it ever needs to be bypassed, add a `--allow-slow` flag rather than lowering the floor.
+- `cantalk` uses the kernel `can-isotp` module (mainline since 5.10) rather than implementing ISO 15765-2 in user space. This keeps the tool tiny and means flow control / consecutive-frame timing are correct by construction. The ISOTP option struct (`can_isotp_options`) is set via `setsockopt(SOL_CAN_ISOTP, CAN_ISOTP_OPTS, ...)` only when `--padding` is given; otherwise kernel defaults apply.
+- `cantalk`'s default RX derivation is OBD2-style (TX+8) for 11-bit and J1939-style source/target swap for 29-bit IDs of the form `18DA<target><source>`. Both are conventions, not protocol guarantees — the user can always override with `:TX,RX`.
 - Per-iface failures during reconfigure don't abort the whole run. Each `ip link` step is gated on prior success of that iface; failed ifaces get a named stderr error (`canconf: canX: configure failed`) and are skipped for subsequent steps (so a bad spec doesn't strand a half-configured iface in the "up" loop). If any iface failed *and* there were multiple CAN ifaces, a mixed-state warning is printed — if they share a bus that warning is the one that matters.
 
 ## Release
