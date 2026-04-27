@@ -267,9 +267,12 @@ def main() -> int:
     print(header())
     now_dt = datetime.now()
     ts = now_dt.strftime("%H:%M:%S")
+    params_emitted: set[str] = set()
     for iface in ifaces:
         print(fmt_row(ts, iface, prev[iface], 0.0, 0.0, flagged=False,
                       notes=initial_notes(prev[iface])))
+        if prev[iface].present:
+            params_emitted.add(iface)
     last_output_date = now_dt.date() if ifaces else None
     if not ifaces:
         print("canmon: no CAN interfaces found yet; waiting...", file=sys.stderr)
@@ -295,8 +298,9 @@ def main() -> int:
                 notes.append(f"STATE {p.state} → {n.state}")
             if p.bittiming_key() != n.bittiming_key():
                 notes.append(f"CONFIG {p.rate_str()} → {n.rate_str()}")
-            if not p.present and n.present:
+            if n.present and iface not in params_emitted:
                 notes.extend(initial_notes(n))
+                params_emitted.add(iface)
             if n.restarts > p.restarts:
                 notes.append(f"RESTART #{n.restarts}")
 
