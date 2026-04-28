@@ -8,6 +8,9 @@ Usage:
   cantalk IFACE --raw                 raw CAN mode (no segmentation)
   cantalk IFACE 7DF --raw             raw, send id=7DF, rx accept-all
 
+If exactly one CAN interface exists on the host, IFACE may be omitted and that
+interface is used automatically.
+
 REPL:
   :7DF                  set tx=0x7DF, derive rx (tx+8 / J1939 swap)
   :7DF,7E8              set tx=0x7DF, rx=0x7E8
@@ -944,9 +947,22 @@ def main() -> int:
         print(f"cantalk {__version__}")
         return 0
 
-    if args.help or not args.interface:
+    if args.help:
         print(__doc__.strip())
-        return 0 if args.help else 2
+        return 0
+
+    if not args.interface:
+        ifaces = common.discover_ifaces()
+        if len(ifaces) == 1:
+            args.interface = ifaces[0]
+        elif len(ifaces) == 0:
+            print("cantalk: no CAN interface found; pass IFACE explicitly",
+                  file=sys.stderr)
+            return 2
+        else:
+            print(f"cantalk: multiple CAN interfaces found ({', '.join(ifaces)}); "
+                  "pass IFACE explicitly", file=sys.stderr)
+            return 2
 
     padding: int | None
     pad_arg = (args.pad or "").strip()
