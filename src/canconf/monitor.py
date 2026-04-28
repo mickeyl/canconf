@@ -153,8 +153,17 @@ def header() -> str:
     return f"{c(HEADER_TEXT, BOLD)}\n{separator()}"
 
 
-def separator() -> str:
-    return c("-" * len(HEADER_TEXT), DIM)
+def separator(label: str | None = None) -> str:
+    width = len(HEADER_TEXT)
+    if not label:
+        return c("-" * width, DIM)
+    pad = f"  {label}  "
+    if len(pad) + 6 > width:
+        return c("-" * width + "\n" + label, DIM)
+    side = (width - len(pad)) // 2
+    left = "-" * side
+    right = "-" * (width - side - len(pad))
+    return f"{c(left, DIM)}{c(pad, BOLD)}{c(right, DIM)}"
 
 
 def color_note(note: str) -> str:
@@ -312,7 +321,7 @@ def main() -> int:
 
             if args.verbose or notes:
                 if last_output_date is not None and today != last_output_date:
-                    print(separator())
+                    print(separator(f"New Day: {today.strftime('%a %Y-%m-%d')}"))
                 print(fmt_row(ts, iface, n, err_per_s, bus_per_s, flagged, notes))
                 last_output_date = today
 
