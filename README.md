@@ -250,7 +250,13 @@ the scroll region (e.g. for scripted use).
 
 - **ISOTP (default).** Kernel `can-isotp` module handles segmentation, flow
   control (FC), and reassembly. Payloads up to 4095 bytes; you only ever
-  see complete messages.
+  see complete messages. Functional requests (`7DF` or `18DB33<source>`)
+  without an explicit RX collect replies from all ECUs for the full timeout:
+  `7E8`–`7EF` for 11-bit, `18DA<source><ecu>` for 29-bit (excluding the tester
+  itself). Each reply is labelled with its CAN ID. Separate kernel ISOTP
+  sockets send flow control to each ECU's physical address, so multi-frame
+  replies work too. Functional requests must fit in a single frame (1–7
+  payload bytes); use a physical address for longer requests.
 - **`--raw`.** A bare `AF_CAN` raw socket. Each typed payload becomes one
   classic CAN frame (≤ 8 bytes). The reply window collects every matching
   frame seen until 250 ms of silence — useful for snooping or talking to
@@ -260,7 +266,9 @@ the scroll region (e.g. for scripted use).
 
 | Input | What it does |
 |------|--------------|
-| `:7DF`                  | Set TX. RX is auto-derived (TX+8 for 11-bit IDs; J1939-style source/target swap for `18DA<target><source>`). |
+| `:7DF`                  | Broadcast request; receive replies from `7E8`–`7EF`. |
+| `:18DB33F1`             | 29-bit broadcast request; receive replies from `18DAF1xx`. |
+| `:7E0`                  | Physical request; RX is auto-derived (TX+8 for 11-bit IDs; source/target swap for `18DA<target><source>`). |
 | `:7DF,7E8`              | Set TX and RX explicitly. |
 | `:18DA10F1,18DAF110`    | 29-bit extended addressing. |
 | `:info` / `:help`       | Show state / show commands. |

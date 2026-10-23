@@ -1,4 +1,4 @@
-.TH CANTALK 1 "2026-04-26" "cantalk 0.4.0" "User Commands"
+.TH CANTALK 1 "2026-10-23" "cantalk 0.4.2" "User Commands"
 .SH NAME
 cantalk \- tiny REPL for sending and receiving CAN messages over SocketCAN
 .SH SYNOPSIS
@@ -63,6 +63,19 @@ If only TX is given (and the mode is ISOTP), RX is auto\-derived: TX+8 for
 11\-bit IDs, source/target swap for 29\-bit
 .B 18DA<target><source>
 J1939\-style physical addressing.
+Functional TX addresses are handled separately when RX is omitted:
+.B 7DF
+receives replies from
+.BR 7E8\-7EF ;
+.B 18DB33<source>
+receives replies from
+.B 18DA<source><ecu>
+(excluding the tester itself).
+All replies are collected for the full timeout and labelled with their CAN ID.
+Kernel ISOTP sockets handle multi\-frame replies with flow control sent to
+each ECU's physical address.
+Functional requests must contain 1\-7 payload bytes (one CAN frame).
+Use a physical address for longer requests.
 .SH REPL COMMANDS
 .TP
 .B :TX

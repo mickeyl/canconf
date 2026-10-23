@@ -73,6 +73,7 @@ test:
 	$(RUN_PY) -c "from canconf.monitor import main; import sys; sys.argv=['canmon','--once','-i','vcan0']; sys.exit(main())" >/dev/null
 	$(RUN_PY) -m canconf.cantalk --help >/dev/null
 	$(RUN_PY) -m canconf.cantalk --version >/dev/null
+	$(RUN_PY) -m unittest discover -s tests
 	$(RUN_PY) -c "from canconf import cantalk as t; \
 		assert t.parse_hex('0902') == bytes([9,2]); \
 		assert t.parse_id('7DF') == 0x7DF; \

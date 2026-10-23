@@ -12,7 +12,8 @@ If exactly one CAN interface exists on the host, IFACE may be omitted and that
 interface is used automatically.
 
 REPL:
-  :7DF                  set tx=0x7DF, derive rx (tx+8 / J1939 swap)
+  :7DF                  broadcast to all ECUs, receive 7E8-7EF
+  :18DB33F1             29-bit broadcast, receive 18DAF1xx
   :7DF,7E8              set tx=0x7DF, rx=0x7E8
   :18DA10F1,18DAF110    29-bit extended addressing
   :info                 show the current state
@@ -35,6 +36,9 @@ segmentation, flow control, and reassembly transparently. Pass --raw to
 bypass it and exchange single 8-byte CAN frames directly. In both modes
 short frames are padded to 8 bytes with the --pad byte (most ECUs expect
 this).
+Without an explicit RX, functional requests (7DF / 18DB33<source>) must fit
+in one frame (1-7 bytes). All ECU replies are collected until --timeout,
+including multi-frame replies.
 
 Requires the interface to be already up (see canconf) and CAP_NET_RAW or root.
 """
@@ -45,6 +49,7 @@ import json
 import os
 import re
 import select
+import selectors
 import signal
 import socket
 import struct
@@ -149,9 +154,25 @@ def fmt_id(can_id: int) -> str:
     return f"{can_id:08X}" if can_id > CAN_SFF_MASK else f"{can_id:03X}"
 
 
-def derive_rx(tx: int) -> int:
+def functional_pairs(tx: int) -> list[tuple[int, int]]:
+    """Physical (TX for flow control, RX) pairs for a functional request."""
+    if tx == 0x7DF:
+        return [(rx - 8, rx) for rx in range(0x7E8, 0x7F0)]
+    if (tx & 0xFFFFFF00) == 0x18DB3300:
+        source = tx & 0xFF
+        return [
+            (0x18DA0000 | (ecu << 8) | source,
+             0x18DA0000 | (source << 8) | ecu)
+            for ecu in range(256) if ecu != source
+        ]
+    return []
+
+
+def derive_rx(tx: int) -> int | None:
     """OBD2 convention for 11-bit (rx = tx + 8); J1939-ish swap for 29-bit
-    physical-addressing IDs (18DA<target><source>); else fall back to tx + 8."""
+    physical IDs; None means multiple functional responders, not a single RX."""
+    if functional_pairs(tx):
+        return None
     if tx <= CAN_SFF_MASK:
         return tx + 8
     if (tx & 0xFFFF0000) == 0x18DA0000:
@@ -168,25 +189,35 @@ def _eff_kid(can_id: int) -> int:
 
 def open_isotp(iface: str, tx_id: int, rx_id: int, padding: int | None) -> socket.socket:
     s = socket.socket(socket.AF_CAN, socket.SOCK_DGRAM, CAN_ISOTP)
-    if padding is not None:
-        flags = ISOTP_TX_PADDING | ISOTP_RX_PADDING
-        opts = struct.pack(
-            ISOTP_OPTS_FMT, flags, 0, 0, padding & 0xFF, padding & 0xFF, 0
-        )
-        s.setsockopt(SOL_CAN_ISOTP, CAN_ISOTP_OPTS, opts)
-    # Python's ISOTP bind tuple is (interface, rx_id, tx_id).
-    s.bind((iface, _eff_kid(rx_id), _eff_kid(tx_id)))
+    try:
+        if padding is not None:
+            flags = ISOTP_TX_PADDING | ISOTP_RX_PADDING
+            opts = struct.pack(
+                ISOTP_OPTS_FMT, flags, 0, 0, padding & 0xFF, padding & 0xFF, 0
+            )
+            s.setsockopt(SOL_CAN_ISOTP, CAN_ISOTP_OPTS, opts)
+        # Python's ISOTP bind tuple is (interface, rx_id, tx_id).
+        s.bind((iface, _eff_kid(rx_id), _eff_kid(tx_id)))
+    except BaseException:
+        s.close()
+        raise
     return s
 
 
-def open_raw(iface: str, rx_id: int | None) -> socket.socket:
+def open_raw(iface: str, rx_id: int | None, *, receive: bool = True) -> socket.socket:
     s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, CAN_RAW)
-    if rx_id is not None:
-        eff = rx_id > CAN_SFF_MASK
-        kid = _eff_kid(rx_id)
-        kmask = (CAN_EFF_MASK | CAN_EFF_FLAG) if eff else CAN_SFF_MASK
-        s.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, struct.pack("=II", kid, kmask))
-    s.bind((iface,))
+    try:
+        if not receive:
+            s.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, b"")
+        elif rx_id is not None:
+            eff = rx_id > CAN_SFF_MASK
+            kid = _eff_kid(rx_id)
+            kmask = (CAN_EFF_MASK | CAN_EFF_FLAG) if eff else CAN_SFF_MASK
+            s.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, struct.pack("=II", kid, kmask))
+        s.bind((iface,))
+    except BaseException:
+        s.close()
+        raise
     return s
 
 
@@ -220,8 +251,12 @@ class State:
         self.tx_id: int | None = None
         self.rx_id: int | None = None
         self.sock: socket.socket | None = None
+        self.responders: dict[socket.socket, int] = {}
 
     def close_socket(self) -> None:
+        for sock in self.responders:
+            sock.close()
+        self.responders.clear()
         if self.sock is not None:
             try:
                 self.sock.close()
@@ -229,13 +264,28 @@ class State:
                 self.sock = None
 
     def set_arbitration(self, tx: int, rx: int | None) -> None:
-        if not self.raw and rx is None:
-            raise ValueError("ISOTP requires both tx and rx ids")
+        pairs = functional_pairs(tx) if not self.raw and rx is None else []
+        if not self.raw and rx is None and not pairs:
+            rx = derive_rx(tx)
         self.close_socket()
-        if self.raw:
-            self.sock = open_raw(self.iface, rx)
-        else:
-            self.sock = open_isotp(self.iface, tx, rx, self.padding)
+        self.tx_id, self.rx_id = None, None
+        try:
+            if pairs:
+                # Bind before sending so even immediate replies get flow control
+                # on the ECU's physical request ID. Reassembly stays in-kernel.
+                for physical_tx, response_rx in pairs:
+                    sock = open_isotp(self.iface, physical_tx, response_rx, self.padding)
+                    self.responders[sock] = response_rx
+                # A raw single-frame sender also works on Linux 5.10, before
+                # CAN_ISOTP_SF_BROADCAST was available. It receives no traffic.
+                self.sock = open_raw(self.iface, None, receive=False)
+            elif self.raw:
+                self.sock = open_raw(self.iface, rx)
+            else:
+                self.sock = open_isotp(self.iface, tx, rx, self.padding)
+        except BaseException:
+            self.close_socket()
+            raise
         self.tx_id, self.rx_id = tx, rx
 
     # ── Visual descriptions ──
@@ -245,11 +295,20 @@ class State:
     def pad_label(self) -> str:
         return f"0x{self.padding:02X}" if self.padding is not None else "off"
 
+    def rx_label(self) -> str:
+        if self.rx_id is not None:
+            return fmt_id(self.rx_id)
+        if not self.raw and self.tx_id is not None and functional_pairs(self.tx_id):
+            if self.tx_id == 0x7DF:
+                return "7E8-7EF"
+            return f"18DA{self.tx_id & 0xFF:02X}xx"
+        return "*"
+
     def arb_label(self, plain: bool = False) -> str:
         """Coloured 'TX → RX' (or 'unset')."""
         if self.tx_id is None:
             return "unset" if plain else c("unset", DIM)
-        rx = fmt_id(self.rx_id) if self.rx_id is not None else "*"
+        rx = self.rx_label()
         if plain:
             return f"{fmt_id(self.tx_id)} → {rx}"
         return f"{c(fmt_id(self.tx_id), CYAN)} {c('→', DIM)} {c(rx, MAGENTA)}"
@@ -272,7 +331,7 @@ class State:
         return (
             c(self.iface, BOLD) + " "
             + c(fmt_id(self.tx_id), CYAN) + c("→", DIM)
-            + (c(fmt_id(self.rx_id), MAGENTA) if self.rx_id is not None else c("*", DIM))
+            + c(self.rx_label(), MAGENTA)
             + f" [{c(self.mode_label(), GREEN if not self.raw else YELLOW)}] "
             + c("❯ ", BOLD)
         )
@@ -395,16 +454,50 @@ def interpret(b: bytes) -> str | None:
 def send_and_receive(state: State, payload: bytes) -> None:
     if state.sock is None or state.tx_id is None:
         return
+    if state.responders and not 1 <= len(payload) <= 7:
+        log(f"  {c('!', BRIGHT_RED)} functional ISOTP request must be 1-7 bytes")
+        return
     print_request(state, payload)
     try:
         if state.raw:
             send_raw_frame(state.sock, state.tx_id, payload, padding=state.padding)
             collect_raw(state)
+        elif state.responders:
+            send_raw_frame(state.sock, state.tx_id, bytes([len(payload)]) + payload,
+                           padding=state.padding)
+            collect_functional(state)
         else:
             state.sock.send(payload)
             collect_isotp(state)
     except OSError as e:
         log(f"  {c('!', BRIGHT_RED)} send/recv error: {e}")
+
+
+def collect_functional(state: State) -> None:
+    deadline = time.monotonic() + state.timeout
+    got_any = False
+    # selectors avoids select()'s FD_SETSIZE limit with many 29-bit responders.
+    with selectors.DefaultSelector() as selector:
+        for sock, rx in state.responders.items():
+            selector.register(sock, selectors.EVENT_READ, rx)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready = selector.select(remaining)
+            if not ready:
+                break
+            for key, _ in ready:
+                try:
+                    data = key.fileobj.recv(4096)
+                except OSError as e:
+                    log(f"  {c('!', BRIGHT_RED)} {fmt_id(key.data)}: recv error: {e}")
+                    selector.unregister(key.fileobj)
+                    continue
+                print_response(key.data, data)
+                got_any = True
+    if not got_any:
+        log(f"  {c('·', DIM)} no response within {state.timeout:g}s")
 
 
 def collect_isotp(state: State) -> None:
@@ -467,13 +560,13 @@ def handle_command(state: State, body: str) -> None:
             return
     else:
         rx = None if state.raw else derive_rx(tx)
-        if rx is not None:
-            log(f"  {c('·', DIM)} rx auto-derived: {fmt_id(rx)}")
     try:
         state.set_arbitration(tx, rx)
     except (OSError, ValueError) as e:
         log(f"  {c('!', BRIGHT_RED)} {e}")
         return
+    if not state.raw and not (len(parts) == 2 and parts[1]):
+        log(f"  {c('·', DIM)} rx auto-derived: {state.rx_label()}")
     show_info(state)
     if _active_term is not None:
         _active_term.draw_prompt()
@@ -482,7 +575,8 @@ def handle_command(state: State, body: str) -> None:
 def show_help() -> None:
     log()
     rows = [
-        (":7DF",                "set tx=0x7DF; rx auto-derived"),
+        (":7DF",                "broadcast; receive 7E8-7EF"),
+        (":18DB33F1",           "29-bit broadcast; receive 18DAF1xx"),
         (":7DF,7E8",            "set tx=0x7DF, rx=0x7E8"),
         (":18DA10F1,18DAF110",  "29-bit extended addressing"),
         (":info",               "show current state"),
@@ -504,7 +598,7 @@ def show_info(state: State) -> None:
             f"arbitration={c('unset', DIM)}  timeout={state.timeout:g}s  pad={pad}"
         )
         return
-    rx = fmt_id(state.rx_id) if state.rx_id is not None else "*"
+    rx = state.rx_label()
     log(
         f"  {c('·', DIM)} iface={c(state.iface, BOLD)}  mode={state.mode_label()}  "
         f"tx={c(fmt_id(state.tx_id), CYAN)}  rx={c(rx, MAGENTA)}  "
@@ -1012,7 +1106,7 @@ def main() -> int:
             _active_term = term
             banner(state)
             if restored_from_state and state.tx_id is not None:
-                rx_str = (fmt_id(state.rx_id) if state.rx_id is not None else "*")
+                rx_str = state.rx_label()
                 log(c(
                     f"  · restored arbitration {fmt_id(state.tx_id)} → {rx_str} "
                     f"from previous session", DIM

@@ -4,6 +4,15 @@ All notable changes to **canconf** are recorded here, newest first. Patch
 releases that only adjusted packaging or release plumbing are folded into the
 next user-visible release.
 
+## v0.4.2 — 2026-10-23
+
+- `cantalk`: functional requests to `7DF` and `18DB33<source>` now receive
+  replies from all matching ECUs when RX is omitted. Multi-frame replies
+  use per-ECU kernel ISOTP sockets and physical flow-control addresses;
+  requests are limited to a single frame (1–7 payload bytes).
+- `cantalk`: automatically selects the interface when exactly one CAN
+  interface exists and IFACE is omitted.
+
 ## v0.4.1 — 2026-04-28
 
 - `canmon`: per-interface parameters (`sp`, `qlen`, `drv`) are now printed
