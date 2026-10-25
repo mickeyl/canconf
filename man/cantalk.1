@@ -1,4 +1,4 @@
-.TH CANTALK 1 "2026-10-23" "cantalk 0.4.2" "User Commands"
+.TH CANTALK 1 "2026-10-25" "cantalk 0.5.0" "User Commands"
 .SH NAME
 cantalk \- tiny REPL for sending and receiving CAN messages over SocketCAN
 .SH SYNOPSIS
@@ -71,12 +71,19 @@ receives replies from
 receives replies from
 .B 18DA<source><ecu>
 (excluding the tester itself).
-All replies are collected for the full timeout and labelled with their CAN ID.
+All replies are displayed continuously and labelled with their CAN ID.
 Kernel ISOTP sockets handle multi\-frame replies with flow control sent to
 each ECU's physical address.
 Functional requests must contain 1\-7 payload bytes (one CAN frame).
 Use a physical address for longer requests.
 .SH REPL COMMANDS
+Incoming messages are displayed while waiting for input as well as after sending.
+All messages are shown without matching their contents to a request.
+Queued ISOTP messages are displayed before the next outgoing request.
+Sending does not pause keyboard input. The timeout controls a notice when no
+message arrives after the latest send; reception continues afterwards.
+When piped input ends, reception continues for the remainder of the timeout
+after the last send before exiting.
 .TP
 .B :TX
 Set TX, derive RX (ISOTP only).
@@ -103,8 +110,8 @@ Use raw CAN sockets instead of ISOTP. Each payload is sent as a single
 8\-byte CAN frame; longer payloads are rejected.
 .TP
 .BR \-t ", " \-\-timeout " " \fISECONDS\fR
-Response timeout. Default: 2.0. In raw mode the deadline is extended by 250 ms
-after each received frame so multi\-frame replies on the same bus are caught.
+Time before reporting that no message arrived after sending. Default: 2.0.
+Keyboard input and reception remain active throughout.
 .TP
 .BR \-p ", " \-\-pad " " \fIHEX\fR
 Pad every CAN frame to 8 bytes with this byte. Default:

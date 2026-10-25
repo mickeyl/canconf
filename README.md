@@ -246,20 +246,28 @@ last-used `tx`/`rx` are restored automatically.
 Pipe stdin or pass `--plain` for a one-prompt-per-line REPL without
 the scroll region (e.g. for scripted use).
 
+Reception continues while you type and between requests. Every received message
+is shown, without matching or filtering its service against the last request.
+Already queued ISOTP messages are displayed before the next outgoing request.
+Sending never pauses keyboard input. `--timeout` controls the notice when no
+message arrives after the latest send; it does not limit reception or delay
+the next command. When piped input ends, reception continues for the remaining
+timeout after the last send before exiting.
+
 ### Modes
 
 - **ISOTP (default).** Kernel `can-isotp` module handles segmentation, flow
   control (FC), and reassembly. Payloads up to 4095 bytes; you only ever
   see complete messages. Functional requests (`7DF` or `18DB33<source>`)
-  without an explicit RX collect replies from all ECUs for the full timeout:
+  without an explicit RX receive replies from all ECUs:
   `7E8`–`7EF` for 11-bit, `18DA<source><ecu>` for 29-bit (excluding the tester
   itself). Each reply is labelled with its CAN ID. Separate kernel ISOTP
   sockets send flow control to each ECU's physical address, so multi-frame
   replies work too. Functional requests must fit in a single frame (1–7
   payload bytes); use a physical address for longer requests.
 - **`--raw`.** A bare `AF_CAN` raw socket. Each typed payload becomes one
-  classic CAN frame (≤ 8 bytes). The reply window collects every matching
-  frame seen until 250 ms of silence — useful for snooping or talking to
+  classic CAN frame (≤ 8 bytes). Every received frame is displayed
+  continuously — useful for snooping or talking to
   ECUs that don't speak ISOTP.
 
 ### REPL grammar
@@ -280,7 +288,7 @@ the scroll region (e.g. for scripted use).
 | Flag | Description |
 |------|-------------|
 | `--raw`                  | Use raw CAN sockets instead of ISOTP. |
-| `-t`, `--timeout SEC`    | Response timeout (default: 2.0). Raw mode keeps listening for 250 ms after each received frame. |
+| `-t`, `--timeout SEC`    | Show a notice if nothing arrives after sending within this time (default: 2.0). Input and reception remain active. |
 | `-p`, `--pad HEX`        | Pad every CAN frame to 8 bytes (default: `AA`; `none` to disable). Applies in both ISOTP and raw modes. |
 | `--plain`                | Disable the bottom-anchored TUI; one prompt per line. |
 | `--no-color`             | Disable ANSI colour. |

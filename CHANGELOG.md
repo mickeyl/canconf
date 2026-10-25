@@ -4,6 +4,16 @@ All notable changes to **canconf** are recorded here, newest first. Patch
 releases that only adjusted packaging or release plumbing are folded into the
 next user-visible release.
 
+## v0.5.0 — 2026-10-25
+
+- `cantalk`: continuously displays incoming messages while waiting for input,
+  including immediately after sending; the timeout no longer blocks typing.
+  Queued messages are shown before the next send rather than appearing as its
+  response. No service matching or content filtering is performed.
+- `cantalk`: `--timeout` now controls the no-reception notice after sending.
+  Keyboard input and reception remain active in ISOTP, functional and raw
+  modes. Piped input retains a final receive window after EOF.
+
 ## v0.4.2 — 2026-10-23
 
 - `cantalk`: functional requests to `7DF` and `18DB33<source>` now receive

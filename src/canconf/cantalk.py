@@ -23,7 +23,7 @@ REPL:
 
 Options:
   --raw                 use raw CAN sockets instead of ISOTP
-  -t, --timeout SEC     response timeout (default: 2.0)
+  -t, --timeout SEC     no-reception notice after sending (default: 2.0)
   -p, --pad HEX         pad every CAN frame to 8 bytes with this byte
                         (default: AA; pass 'none' to disable)
   --plain               don't use the bottom-anchored TUI (force the simple line-by-line REPL)
@@ -37,8 +37,8 @@ bypass it and exchange single 8-byte CAN frames directly. In both modes
 short frames are padded to 8 bytes with the --pad byte (most ECUs expect
 this).
 Without an explicit RX, functional requests (7DF / 18DB33<source>) must fit
-in one frame (1-7 bytes). All ECU replies are collected until --timeout,
-including multi-frame replies.
+in one frame (1-7 bytes). Reception and keyboard input run continuously,
+including while waiting for multi-frame replies.
 
 Requires the interface to be already up (see canconf) and CAP_NET_RAW or root.
 """
@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import select
@@ -90,7 +91,6 @@ CAN_FRAME_SIZE = struct.calcsize(CAN_FRAME_FMT)
 
 DEFAULT_TIMEOUT = 2.0
 DEFAULT_PADDING = 0xAA  # most ECUs expect frames padded to 8 bytes
-RAW_QUIET_PERIOD = 0.25  # extend deadline by this after each received frame
 HISTORY_MAX = 1000
 
 
@@ -231,7 +231,7 @@ def send_raw_frame(
         data = data + bytes([padding & 0xFF]) * (8 - dlc)
         dlc = 8
     frame = struct.pack(CAN_FRAME_FMT, _eff_kid(can_id), dlc, data.ljust(8, b"\x00"))
-    sock.send(frame)
+    sock.send(frame, socket.MSG_DONTWAIT)
 
 
 def recv_raw_frame(sock: socket.socket) -> tuple[int, bytes]:
@@ -252,8 +252,11 @@ class State:
         self.rx_id: int | None = None
         self.sock: socket.socket | None = None
         self.responders: dict[socket.socket, int] = {}
+        self.receive_until: float | None = None
+        self.received_since_send = False
 
     def close_socket(self) -> None:
+        self.receive_until = None
         for sock in self.responders:
             sock.close()
         self.responders.clear()
@@ -451,86 +454,63 @@ def interpret(b: bytes) -> str | None:
 
 
 # ── Send / receive ───────────────────────────────────────────────────────────
-def send_and_receive(state: State, payload: bytes) -> None:
+def receive_sockets(state: State) -> dict[socket.socket, int | None]:
+    if state.responders:
+        return state.responders
+    if state.sock is not None:
+        return {state.sock: state.rx_id}
+    return {}
+
+
+def receive_one(state: State, sock: socket.socket, rx: int | None) -> None:
+    """Display bytes as received, without associating them with a request."""
+    try:
+        if state.raw:
+            can_id, data = recv_raw_frame(sock)
+        else:
+            can_id, data = rx, sock.recv(4096)
+    except OSError as e:
+        log(f"  {c('!', BRIGHT_RED)} recv error: {e}")
+        return
+    print_response(can_id if can_id is not None else 0, data)
+    state.received_since_send = True
+
+
+def receive_pending(state: State) -> None:
+    """Show already queued messages before printing the next outgoing message."""
+    with selectors.DefaultSelector() as selector:
+        for sock, rx in receive_sockets(state).items():
+            selector.register(sock, selectors.EVENT_READ, rx)
+        while selector.get_map():
+            ready = selector.select(0)
+            if not ready:
+                break
+            for key, _ in ready:
+                receive_one(state, key.fileobj, key.data)
+
+
+def send_payload(state: State, payload: bytes) -> None:
     if state.sock is None or state.tx_id is None:
         return
     if state.responders and not 1 <= len(payload) <= 7:
         log(f"  {c('!', BRIGHT_RED)} functional ISOTP request must be 1-7 bytes")
         return
-    print_request(state, payload)
     try:
+        if not state.raw:
+            receive_pending(state)
+        print_request(state, payload)
         if state.raw:
             send_raw_frame(state.sock, state.tx_id, payload, padding=state.padding)
-            collect_raw(state)
         elif state.responders:
             send_raw_frame(state.sock, state.tx_id, bytes([len(payload)]) + payload,
                            padding=state.padding)
-            collect_functional(state)
         else:
-            state.sock.send(payload)
-            collect_isotp(state)
-    except OSError as e:
-        log(f"  {c('!', BRIGHT_RED)} send/recv error: {e}")
+            state.sock.send(payload, socket.MSG_DONTWAIT)
+        state.receive_until = time.monotonic() + state.timeout
+        state.received_since_send = False
+    except (OSError, ValueError) as e:
+        log(f"  {c('!', BRIGHT_RED)} send error: {e}")
 
-
-def collect_functional(state: State) -> None:
-    deadline = time.monotonic() + state.timeout
-    got_any = False
-    # selectors avoids select()'s FD_SETSIZE limit with many 29-bit responders.
-    with selectors.DefaultSelector() as selector:
-        for sock, rx in state.responders.items():
-            selector.register(sock, selectors.EVENT_READ, rx)
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            ready = selector.select(remaining)
-            if not ready:
-                break
-            for key, _ in ready:
-                try:
-                    data = key.fileobj.recv(4096)
-                except OSError as e:
-                    log(f"  {c('!', BRIGHT_RED)} {fmt_id(key.data)}: recv error: {e}")
-                    selector.unregister(key.fileobj)
-                    continue
-                print_response(key.data, data)
-                got_any = True
-    if not got_any:
-        log(f"  {c('·', DIM)} no response within {state.timeout:g}s")
-
-
-def collect_isotp(state: State) -> None:
-    state.sock.settimeout(state.timeout)
-    try:
-        data = state.sock.recv(4096)
-    except socket.timeout:
-        log(f"  {c('·', DIM)} no response within {state.timeout:g}s")
-        return
-    finally:
-        state.sock.settimeout(None)
-    print_response(state.rx_id if state.rx_id is not None else 0, data)
-
-
-def collect_raw(state: State) -> None:
-    deadline = time.monotonic() + state.timeout
-    got_any = False
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        rd, _, _ = select.select([state.sock], [], [], remaining)
-        if not rd:
-            break
-        try:
-            can_id, payload = recv_raw_frame(state.sock)
-        except OSError:
-            break
-        print_response(can_id, payload)
-        got_any = True
-        deadline = time.monotonic() + RAW_QUIET_PERIOD
-    if not got_any:
-        log(f"  {c('·', DIM)} no response within {state.timeout:g}s")
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -634,6 +614,7 @@ class Term:
         self.cur = 0
         self.hist_idx = 0
         self.scratch = ""
+        self._plain_buf = b""
 
     # ---- lifecycle ----
     def __enter__(self) -> "Term":
@@ -753,7 +734,25 @@ class Term:
         """Read one line. Raises EOFError on Ctrl-D (empty buffer),
         KeyboardInterrupt on Ctrl-C."""
         if not self.is_tty:
-            line = input(self.state.simple_prompt())
+            prompt = self.state.simple_prompt()
+            print(prompt, end="", flush=True)
+            try:
+                fd = sys.stdin.fileno()
+            except (AttributeError, OSError, ValueError):
+                line = input()
+            else:
+                while b"\n" not in self._plain_buf:
+                    self._wait_for_input(plain_prompt=prompt)
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        if self._plain_buf:
+                            break
+                        if not sys.stdin.isatty():
+                            self._wait_for_input(plain_prompt=prompt, finish=True)
+                        raise EOFError
+                    self._plain_buf += chunk
+                line_bytes, _, self._plain_buf = self._plain_buf.partition(b"\n")
+                line = line_bytes.decode(sys.stdin.encoding or "utf-8", errors="replace").rstrip("\r")
             if line and (not self.history or self.history[-1] != line):
                 self.history.append(line)
                 if len(self.history) > HISTORY_MAX:
@@ -829,7 +828,55 @@ class Term:
 
             self.draw_prompt()
 
+    def _wait_for_input(self, plain_prompt: str | None = None, *, finish: bool = False) -> None:
+        """Keep receiving while the user is thinking or editing a command."""
+        fd = None
+        if not finish:
+            try:
+                fd = self.fd if self.is_tty else sys.stdin.fileno()
+            except (AttributeError, OSError, ValueError):
+                return  # StringIO and other streams without a file descriptor.
+        # poll supports regular-file stdin and sockets above FD_SETSIZE.
+        poller = select.poll()
+        if not finish:
+            poller.register(fd, select.POLLIN)
+        sockets = {sock.fileno(): (sock, rx)
+                   for sock, rx in receive_sockets(self.state).items()}
+        for sock_fd in sockets:
+            poller.register(sock_fd, select.POLLIN)
+        while True:
+            wait_ms = None
+            if self.state.receive_until is not None:
+                remaining = self.state.receive_until - time.monotonic()
+                if remaining <= 0:
+                    self.state.receive_until = None
+                    if not self.state.received_since_send:
+                        if plain_prompt is not None:
+                            print()
+                        log(f"  {c('·', DIM)} no incoming message within {self.state.timeout:g}s")
+                        if plain_prompt is not None:
+                            print(plain_prompt, end="", flush=True)
+                else:
+                    wait_ms = math.ceil(remaining * 1000)
+            if finish and self.state.receive_until is None:
+                return
+            events = poller.poll(wait_ms)
+            incoming = [(sock_fd, flags) for sock_fd, flags in events if sock_fd != fd]
+            if incoming and plain_prompt is not None:
+                print()
+            for sock_fd, flags in incoming:
+                sock, rx = sockets[sock_fd]
+                if flags & (select.POLLIN | select.POLLERR):
+                    receive_one(self.state, sock, rx)
+                if flags & (select.POLLHUP | select.POLLNVAL):
+                    poller.unregister(sock_fd)
+            if incoming and plain_prompt is not None:
+                print(plain_prompt, end="", flush=True)
+            if any(sock_fd == fd for sock_fd, _ in events):
+                return
+
     def _read_key(self) -> str | None:
+        self._wait_for_input()
         try:
             b = os.read(self.fd, 1)
         except (InterruptedError, BlockingIOError):
@@ -938,7 +985,7 @@ def repl(state: State, term: Term) -> int:
         except ValueError as e:
             log(f"  {c('!', BRIGHT_RED)} syntax: {e}")
             continue
-        send_and_receive(state, payload)
+        send_payload(state, payload)
 
 
 # ── State persistence (history + per-iface arbitration) ─────────────────────

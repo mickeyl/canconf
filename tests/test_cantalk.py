@@ -4,7 +4,10 @@ Set CANTALK_TEST_IFACE to a dedicated vcan interface for kernel integration test
 """
 import contextlib
 import os
+import pty
 import socket
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -95,10 +98,11 @@ class FunctionalTests(unittest.TestCase):
         self.state.tx_id = 0x7DF
         self.state.sock = Mock()
         self.state.responders = {Mock(): 0x7E8}
-        with patch.object(t, "collect_functional"), patch.object(t, "log"):
+        with patch.object(t, "log"), \
+                patch.object(t, "receive_pending"):
             for padding in (0xAA, None):
                 self.state.padding = padding
-                t.send_and_receive(self.state, b"\x09\x02")
+                t.send_payload(self.state, b"\x09\x02")
                 frame = self.state.sock.send.call_args.args[0]
                 can_id, dlc, data = t.struct.unpack(t.CAN_FRAME_FMT, frame)
                 self.assertEqual(can_id, 0x7DF)
@@ -107,11 +111,11 @@ class FunctionalTests(unittest.TestCase):
                 if padding is not None:
                     self.assertEqual(data[3:], b"\xAA" * 5)
             self.state.sock.send.reset_mock()
-            t.send_and_receive(self.state, bytes(7))
+            t.send_payload(self.state, bytes(7))
             self.state.sock.send.assert_called_once()
             self.state.sock.send.reset_mock()
             for payload in (b"", bytes(8)):
-                t.send_and_receive(self.state, payload)
+                t.send_payload(self.state, payload)
             self.state.sock.send.assert_not_called()
 
     def test_saved_functional_arbitration_restores_all_receivers(self):
@@ -126,28 +130,247 @@ class FunctionalTests(unittest.TestCase):
         broken.recv.side_effect = OSError("bad sequence")
         working.recv.return_value = b"\x41\x00"
         self.state.responders = {broken: 0x7E8, working: 0x7E9}
-        selector = Mock()
-        selector.select.side_effect = [
-            [(Mock(fileobj=broken, data=0x7E8), 1),
-             (Mock(fileobj=working, data=0x7E9), 1)], []]
-        with patch.object(t.selectors, "DefaultSelector") as factory, \
-                patch.object(t, "log"), patch.object(t, "print_response") as response:
-            factory.return_value.__enter__.return_value = selector
-            t.collect_functional(self.state)
+        with patch.object(t, "log"), patch.object(t, "print_response") as response:
+            t.receive_one(self.state, broken, 0x7E8)
+            t.receive_one(self.state, working, 0x7E9)
         response.assert_called_once_with(0x7E9, b"\x41\x00")
-        selector.unregister.assert_called_once_with(broken)
 
-    def test_no_response_reports_timeout(self):
-        self.state.responders = {Mock(): 0x7E8}
-        with patch.object(t.selectors, "DefaultSelector") as factory, \
-                patch.object(t, "log") as log:
-            factory.return_value.__enter__.return_value.select.return_value = []
-            t.collect_functional(self.state)
-        self.assertIn("no response within 0.8s", log.call_args.args[0])
+
+class ReceiveStreamTests(unittest.TestCase):
+    def setUp(self):
+        self.client, self.ecu = socket.socketpair(type=socket.SOCK_DGRAM)
+        self.ecu.settimeout(1)
+        self.state = t.State("test", False, 0.05, None)
+        self.state.sock = self.client
+        self.state.tx_id, self.state.rx_id = 0x18DA00F9, 0x18DAF900
+        self.addCleanup(self.state.close_socket)
+        self.addCleanup(self.ecu.close)
+
+    def test_queued_message_is_shown_before_new_send(self):
+        self.ecu.send(bytes.fromhex("5A8000003169"))
+        events = []
+
+        def reply():
+            self.ecu.recv(4096)
+            self.ecu.send(b"\x7E")
+
+        worker = threading.Thread(target=reply, daemon=True)
+        worker.start()
+        with patch.object(t, "print_request", side_effect=lambda _, b: events.append(("tx", b))), \
+                patch.object(t, "print_response", side_effect=lambda _, b: events.append(("rx", b))):
+            t.send_payload(self.state, b"\x3E")
+            t.Term(self.state, [], active=False)._wait_for_input(finish=True)
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(events, [("rx", bytes.fromhex("5A8000003169")),
+                                  ("tx", b"\x3E"), ("rx", b"\x7E")])
+        self.client.setblocking(False)
+        with self.assertRaises(BlockingIOError):
+            self.client.recv(4096)
+
+    def test_every_message_is_displayed_without_service_filtering(self):
+        messages = [b"\x7F\x3E\x78", b"\x5A\x80", b"\x7E", b"\x01\x02"]
+        for message in messages:
+            self.ecu.send(message)
+        with patch.object(t, "print_response") as response:
+            t.receive_pending(self.state)
+        self.assertEqual([call.args[1] for call in response.call_args_list], messages)
+        self.assertIsNone(self.client.gettimeout())
+
+    def test_timeout_notice_does_not_require_a_keypress(self):
+        with patch.object(t, "log") as log:
+            t.send_payload(self.state, b"\x3E")
+            term = t.Term(self.state, [], active=False)
+            term._wait_for_input(finish=True)
+            term._wait_for_input(finish=True)
+        notices = [call for call in log.call_args_list if "no incoming message" in str(call)]
+        self.assertEqual(len(notices), 1)
+        self.assertIsNone(self.state.receive_until)
+
+    def test_timeout_does_not_disable_late_reception(self):
+        with patch.object(t, "log"):
+            t.send_payload(self.state, b"\x3E")
+            t.Term(self.state, [], active=False)._wait_for_input(finish=True)
+        self.ecu.send(b"\x7E")
+        with patch.object(t, "print_response") as response:
+            t.receive_pending(self.state)
+        response.assert_called_once_with(0x18DAF900, b"\x7E")
+
+    def test_receives_while_waiting_for_keyboard_in_plain_and_tui_modes(self):
+        for tui in (False, True):
+            with self.subTest(tui=tui):
+                read_fd, write_fd = os.pipe()
+                displayed = threading.Event()
+                term = t.Term(self.state, [], active=False)
+                term.is_tty, term.fd = tui, read_fd
+
+                def deliver():
+                    self.ecu.send(b"\x5A\x80")
+                    # Keyboard input arrives only after the response was shown.
+                    displayed.wait(1)
+                    os.write(write_fd, b"\n")
+
+                worker = threading.Thread(target=deliver, daemon=True)
+                worker.start()
+                try:
+                    with patch.object(t.sys, "stdin") as stdin, \
+                            patch.object(t, "print_response", side_effect=lambda *_: displayed.set()) as response:
+                        stdin.fileno.return_value = read_fd
+                        term._wait_for_input()
+                    self.assertTrue(displayed.is_set())
+                    response.assert_called_once_with(0x18DAF900, b"\x5A\x80")
+                finally:
+                    worker.join(2)
+                    os.close(read_fd)
+                    os.close(write_fd)
+
+
+class TerminalResponsivenessTests(unittest.TestCase):
+    def test_piped_commands_do_not_wait_and_eof_keeps_receiving(self):
+        client, ecu = socket.socketpair(type=socket.SOCK_DGRAM)
+        code = '''
+import socket, sys
+from canconf import cantalk as t
+state = t.State('test', False, .2, None)
+state.sock = socket.socket(fileno=int(sys.argv[1]))
+state.tx_id, state.rx_id = 0x7E0, 0x7E8
+with t.Term(state, [], active=False) as term:
+    t._active_term = term
+    t.repl(state, term)
+state.close_socket()
+'''
+        with contextlib.ExitStack() as stack:
+            stack.callback(client.close)
+            stack.callback(ecu.close)
+            process = subprocess.Popen([sys.executable, "-c", code, str(client.fileno())],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, pass_fds=(client.fileno(),))
+            stack.callback(process.wait)
+            stack.callback(process.kill)
+            stack.callback(process.stdout.close)
+            stack.callback(process.stderr.close)
+            stack.callback(process.stdin.close)
+            process.stdin.write(b"3e\n1a80\n")
+            process.stdin.flush()
+            ecu.settimeout(0.75)
+            self.assertEqual(ecu.recv(4096), b"\x3E")
+            self.assertEqual(ecu.recv(4096), b"\x1A\x80")
+            process.stdin.close()
+            ecu.send(b"\x7E")
+            ecu.send(b"\x5A\x80")
+            self.assertEqual(process.wait(timeout=1), 0)
+            output = process.stdout.read()
+            self.assertIn(b"7E", output)
+            self.assertIn(b"5A 80", output)
+
+    def test_typing_and_reception_immediately_after_send_in_all_modes(self):
+        code = '''
+import socket, sys
+from canconf import cantalk as t
+mode = sys.argv[1]
+state = t.State('test', mode == 'raw', 2, None)
+state.sock = socket.socket(fileno=int(sys.argv[2]))
+state.tx_id, state.rx_id = 0x7E0, 0x7E8
+if mode == 'functional':
+    state.tx_id, state.rx_id = 0x7DF, None
+    state.responders = {socket.socket(fileno=int(sys.argv[3])): 0x7E8}
+with t.Term(state, []) as term:
+    t._active_term = term
+    t.repl(state, term)
+t._active_term = None
+state.close_socket()
+'''
+        for mode in ("isotp", "raw", "functional"):
+            with self.subTest(mode=mode), contextlib.ExitStack() as stack:
+                sender, ecu = socket.socketpair(type=socket.SOCK_DGRAM)
+                receiver, reply = socket.socketpair(type=socket.SOCK_DGRAM)
+                for sock in (sender, ecu, receiver, reply):
+                    stack.callback(sock.close)
+                master, slave = pty.openpty()
+                stack.callback(os.close, master)
+                stack.callback(os.close, slave)
+                process = subprocess.Popen(
+                    [sys.executable, "-c", code, mode, str(sender.fileno()), str(receiver.fileno())],
+                    stdin=slave, stdout=slave, stderr=slave,
+                    pass_fds=(sender.fileno(), receiver.fileno()),
+                    env=dict(os.environ, TERM="xterm"))
+                stack.callback(process.wait)
+                stack.callback(process.kill)
+
+                def await_output(needle, timeout=1):
+                    output = b""
+                    deadline = time.monotonic() + timeout
+                    while needle not in output:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not t.select.select([master], [], [], remaining)[0]:
+                            self.fail(f"Missing {needle!r} in terminal output: {output!r}")
+                        output += os.read(master, 65536)
+                    return output
+
+                await_output("❯".encode())
+                os.write(master, b"3e\n")
+                ecu.settimeout(0.75)
+                request = ecu.recv(4096)
+                self.assertEqual(request if mode == "isotp" else
+                                 t.struct.unpack(t.CAN_FRAME_FMT, request)[2][:2],
+                                 b"\x3E" if mode == "isotp" else
+                                 b"\x01\x3E" if mode == "functional" else b"\x3E\x00")
+                os.write(master, b"0902")
+                await_output(b"0902", timeout=0.75)  # Must not wait the two-second timeout.
+                if mode == "raw":
+                    ecu.send(t.struct.pack(t.CAN_FRAME_FMT, 0x7E8, 1, b"\x7E"))
+                else:
+                    (reply if mode == "functional" else ecu).send(b"\x7E")
+                await_output(b"7E", timeout=0.75)
+                os.write(master, b"\n")
+                request = ecu.recv(4096)
+                self.assertEqual(request if mode == "isotp" else
+                                 t.struct.unpack(t.CAN_FRAME_FMT, request)[2][:3],
+                                 b"\x09\x02" if mode == "isotp" else
+                                 b"\x02\x09\x02" if mode == "functional" else b"\x09\x02\x00")
+                os.write(master, b"\x04")
+                self.assertEqual(process.wait(timeout=0.75), 0)
 
 
 @unittest.skipUnless(os.environ.get("CANTALK_TEST_IFACE"), "needs dedicated vcan interface")
 class KernelFunctionalTests(unittest.TestCase):
+    def test_queued_identification_then_tester_present(self):
+        iface = os.environ["CANTALK_TEST_IFACE"]
+        events = []
+        errors = []
+        with contextlib.ExitStack() as stack:
+            state = t.State(iface, False, 0.15, 0xAA)
+            stack.callback(state.close_socket)
+            state.set_arbitration(0x18DA00F9, 0x18DAF900)
+            ecu = stack.enter_context(contextlib.closing(
+                t.open_isotp(iface, 0x18DAF900, 0x18DA00F9, 0xAA)))
+            ecu.settimeout(1)
+            old = bytes.fromhex("5A8000003169") + bytes(range(30))
+            ecu.send(old)
+            self.assertTrue(t.select.select([state.sock], [], [], 1)[0])
+            monitor = stack.enter_context(contextlib.closing(t.open_raw(iface, 0x18DAF900)))
+            monitor.settimeout(1)
+
+            def reply():
+                try:
+                    self.assertEqual(ecu.recv(4096), b"\x3E")
+                    ecu.send(b"\x7E")
+                except BaseException as e:
+                    errors.append(e)
+
+            worker = threading.Thread(target=reply, daemon=True)
+            worker.start()
+            with patch.object(t, "print_request", side_effect=lambda _, b: events.append(("tx", b))), \
+                    patch.object(t, "print_response", side_effect=lambda _, b: events.append(("rx", b))):
+                t.send_payload(state, b"\x3E")
+                t.Term(state, [], active=False)._wait_for_input(finish=True)
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            if errors:
+                raise errors[0]
+            self.assertEqual(events, [("rx", old), ("tx", b"\x3E"), ("rx", b"\x7E")])
+            self.assertEqual(t.recv_raw_frame(monitor)[1][:2], b"\x01\x7E")
+
     def exchange(self, tx, pairs, padding):
         iface = os.environ["CANTALK_TEST_IFACE"]
         replies = [bytes([0x49, i]) + bytes(range(30)) for i in range(len(pairs))]
@@ -182,7 +405,8 @@ class KernelFunctionalTests(unittest.TestCase):
             worker = threading.Thread(target=respond, daemon=True)
             worker.start()
             with patch.object(t, "log"), patch.object(t, "print_response") as response:
-                t.send_and_receive(state, b"\x09\x02")
+                t.send_payload(state, b"\x09\x02")
+                t.Term(state, [], active=False)._wait_for_input(finish=True)
             worker.join(3)
             self.assertFalse(worker.is_alive(), "ECU thread did not finish")
             if errors:
