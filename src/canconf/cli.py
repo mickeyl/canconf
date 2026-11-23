@@ -9,6 +9,7 @@ Usage:
   canconf off            | down   bring all interfaces down
   canconf up                      bring all interfaces up (no reconfigure)
   canconf bitrates                show achievable bitrates per interface
+  canconf topo                    probe which interfaces share a physical bus
 
   -i, --ifaces a,b,c              only these (default: all can*)
   -r, --restart-ms N              auto-restart on bus-off after N ms
@@ -18,6 +19,7 @@ Usage:
       --berr                      enable bus error reporting
       --term OHM                  set termination resistor (if supported)
       --txqueuelen N              set tx queue length (default: 10000)
+      --topo                      after configuring, probe and draw the bus topology
   -n, --dry-run                   print ip commands, do not execute
   -v, --verbose                   print ip commands as they run
   -q, --quiet                     suppress post-apply status print
@@ -40,6 +42,7 @@ from . import common
 from .common import (
     c, discover_ifaces, fmt_rate, get_links, status_lines,
 )
+from .topology import show_topology
 
 DEFAULT_TXQUEUELEN = 10000
 
@@ -225,6 +228,7 @@ def main() -> int:
     ap.add_argument("--berr", action="store_true")
     ap.add_argument("--term", type=int)
     ap.add_argument("--txqueuelen", type=int, default=DEFAULT_TXQUEUELEN)
+    ap.add_argument("--topo", action="store_true")
     ap.add_argument("-n", "--dry-run", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("-q", "--quiet", action="store_true")
@@ -259,6 +263,12 @@ def main() -> int:
     if args.spec == "bitrates":
         show_bitrates(ifaces)
         return 0
+
+    if args.spec in ("topo", "topology"):
+        if args.dry_run:
+            print("+ probe " + ", ".join(ifaces) + "  (dry-run: nothing transmitted)")
+            return 0
+        return show_topology(ifaces)
 
     try:
         spec = parse_spec(args.spec)
@@ -307,6 +317,10 @@ def main() -> int:
     rc = report_outcome(ifaces, failed)
     if not args.dry_run and not args.quiet:
         show_status(ifaces)
+    if args.topo and not args.dry_run:
+        print()
+        # Give the controllers a moment to reach error-active after link up.
+        rc = show_topology([i for i in ifaces if i not in failed], settle=0.5) or rc
     return rc
 
 

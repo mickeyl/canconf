@@ -4,6 +4,15 @@ All notable changes to **canconf** are recorded here, newest first. Patch
 releases that only adjusted packaging or release plumbing are folded into the
 next user-visible release.
 
+## v0.6.0 — 2026-11-23
+
+- `canconf topo` / `canconf --topo SPEC`: diagnostic that transmits tagged
+  frames on every interface, listens on all others and draws an ASCII
+  topology of which interfaces share a physical bus. Interfaces that hear no
+  peer get a line of kernel-counter evidence (state, rx/tx and error deltas).
+  Listen-only and loopback interfaces are skipped with a reason; `-n topo`
+  transmits nothing; probe arbitration IDs carry a per-run nonce.
+
 ## v0.5.0 — 2026-10-25
 
 - `cantalk`: continuously displays incoming messages while waiting for input,

@@ -103,6 +103,7 @@ canconf 500k/2M@0.875/0.75      same, with nominal & data sample points
 canconf off    |    down        bring all interfaces down
 canconf up                      bring all interfaces up (no reconfigure)
 canconf bitrates                show achievable bitrates per interface
+canconf topo                    probe which interfaces share a physical bus
 ```
 
 Positional spec: `BITRATE[/DBITRATE][@SP[/DSP]]`. Bitrates accept the suffixes
@@ -113,6 +114,19 @@ Positional spec: `BITRATE[/DBITRATE][@SP[/DSP]]`. Bitrates accept the suffixes
 - Discovers all CAN interfaces by ARPHRD type (so `can*`, `vcan*`, `slcan*` are all picked up — no name matching).
 - One compact spec for classic CAN and CAN-FD alike.
 - `canconf bitrates` reports the driver, reference clock, the achievable bitrate envelope (derived from `bittiming_const`), which standard bitrates fall within it, and whether the hardware supports CAN-FD at all. No brute-forcing, all introspection.
+- `canconf topo` (or `--topo` after a reconfigure) sends tagged frames on every interface and listens on all others, then draws which interfaces share a bus:
+
+  ```
+  Bus 1  3 nodes
+  ═══════╤═════════════╤═════════════╤═══════
+         │             │             │
+    ┌────┴────┐   ┌────┴────┐   ┌────┴────┐
+    │   can0  │   │   can1  │   │   can2  │
+    └─────────┘   └─────────┘   └─────────┘
+      500k/2M       500k/2M       500k/2M
+  ```
+
+  Needs no root. A lone interface is ambiguous (really alone, or no other node ACKs). Its unacknowledged probe stays pending in the controller until a node appears, so don't probe a live bus you can't afford to disturb.
 - Sets `txqueuelen 10000` by default (the kernel default of 10 is painfully low for anything other than idle buses).
 - Prints the live post-apply state — including `qlen` and the underlying driver — so you can verify the driver actually accepted what you asked for (drivers silently round bitrates to what the clock can produce).
 - ANSI colour with sensible auto-detection, `NO_COLOR`/`FORCE_COLOR`, and a `--no-color` flag.
@@ -129,6 +143,7 @@ Positional spec: `BITRATE[/DBITRATE][@SP[/DSP]]`. Bitrates accept the suffixes
 | `--one-shot` | One-shot mode |
 | `--berr` | Enable bus error reporting |
 | `--term OHM` | Set termination resistor (if the hardware supports it) |
+| `--topo` | After configuring, probe and draw the bus topology |
 | `--txqueuelen N` | Override the tx queue length (default: 10000) |
 | `-n`, `--dry-run` | Print the `ip` commands that would run, do nothing |
 | `-v`, `--verbose` | Print each `ip` command as it runs |
