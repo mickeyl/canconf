@@ -28,12 +28,11 @@ from .common import c, fmt_rate, get_links
 # Inlined so the module imports on Python builds without socket.CAN_RAW etc.
 AF_CAN = getattr(socket, "AF_CAN", 29)
 CAN_RAW = getattr(socket, "CAN_RAW", 1)
-CAN_EFF_FLAG = 0x80000000
 FRAME = struct.Struct("=IB3x8s")
 
-# Extended ID near the bottom of the arbitration priority range, so probes
-# mostly lose against real traffic on a live bus.
-PROBE_ID_BASE = 0x1FFF0000   # | per-run nonce (16 bit)
+# Fixed 11-bit probe ID shared by every canconf probe, so it can be
+# recognised (and filtered) on the bus. Payload still carries a per-run nonce.
+PROBE_ID = 0x042
 MAGIC = b"CT"
 # magic(2) nonce(2) sender-index(1) seq(1) pad(2)
 PAYLOAD = struct.Struct("=2sHBB2x")
@@ -67,9 +66,7 @@ def probe(ifaces: list[str], count: int = DEFAULT_COUNT,
     """Transmit probes on each iface and record who hears them.
 
     A frame is attributed to its sender by the index in its payload, not by
-    whose turn it is, so a late-delivered frame still counts. The nonce also
-    goes into the arbitration ID, so two concurrent runs on one bus never
-    transmit identical IDs with different data.
+    whose turn it is, so a late-delivered frame still counts.
     """
     res = ProbeResult(ifaces)
     socks: dict[str, socket.socket] = {}
@@ -98,7 +95,7 @@ def probe(ifaces: list[str], count: int = DEFAULT_COUNT,
                 continue
             for seq in range(count):
                 data = PAYLOAD.pack(MAGIC, nonce, idx & 0xFF, seq)
-                frame = FRAME.pack(PROBE_ID_BASE | nonce | CAN_EFF_FLAG,
+                frame = FRAME.pack(PROBE_ID,
                                    len(data), data.ljust(8, b"\0"))
                 try:
                     socks[src].send(frame)

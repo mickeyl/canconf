@@ -47,8 +47,8 @@ the standard CAN bitrates that fall within it, and \- for FD\-capable hardware
 .TP
 .B topo
 Probe which interfaces share a physical bus and draw the result as ASCII art.
-Each interface that is up transmits a few tagged classic CAN frames (extended
-ID in the lowest\-priority range); every other interface listens. Interfaces
+Each interface that is up transmits a few tagged classic CAN frames (11\-bit
+ID 0x042); every other interface listens. Interfaces
 that hear each other are on the same bus. Needs no root. An interface that
 hears nothing is reported as alone on its bus \- or no other node ACKs; such
 an unacknowledged frame stays pending in the controller until a node appears.

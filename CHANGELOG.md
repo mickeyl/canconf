@@ -4,6 +4,13 @@ All notable changes to **canconf** are recorded here, newest first. Patch
 releases that only adjusted packaging or release plumbing are folded into the
 next user-visible release.
 
+## v0.6.2 — 2026-11-23
+
+- `canconf topo`: probe frames now use the fixed 11-bit arbitration ID
+  `0x042` (previously an extended ID carrying a per-run nonce). The nonce
+  stays in the payload for attribution. Concurrent probes on one bus
+  transmit identical IDs.
+
 ## v0.6.1 — 2026-11-23
 
 - `canconf topo`: nodes now show their driver name instead of the bitrate
@@ -18,7 +25,7 @@ next user-visible release.
   topology of which interfaces share a physical bus. Interfaces that hear no
   peer get a line of kernel-counter evidence (state, rx/tx and error deltas).
   Listen-only and loopback interfaces are skipped with a reason; `-n topo`
-  transmits nothing; probe arbitration IDs carry a per-run nonce.
+  transmits nothing.
 
 ## v0.5.0 — 2026-10-25
 
