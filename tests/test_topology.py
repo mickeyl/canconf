@@ -66,13 +66,27 @@ class DiagnoseTests(unittest.TestCase):
         self.assertIn("no errors", msg)
 
 
+class DriverTests(unittest.TestCase):
+    def test_fallbacks(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(f"{d}/can9/device")
+            os.symlink("/x/bus/usb/drivers/slcan_drv", f"{d}/can9/device/driver")
+            self.assertEqual(t.driver_label("can9", {}, d), "slcan_drv")
+            self.assertEqual(t.driver_label("vcan0", {"linkinfo": {"info_kind": "vcan"}}, d), "vcan")
+            const = {"linkinfo": {"info_data": {"bittiming_const": {"name": "gs_usb"}}}}
+            self.assertEqual(t.driver_label("can9", const, d), "gs_usb")
+            self.assertEqual(t.driver_label("none", None, d), "")
+
+
 class RenderTests(unittest.TestCase):
     def test_render_contains_all_nodes(self):
-        links = {n: {"linkinfo": {"info_data": {"bittiming": {"bitrate": 500000}}}}
+        links = {n: {"linkinfo": {"info_data": {"bittiming": {"bitrate": 500000},
+                                                 "bittiming_const": {"name": "gs_usb"}}}}
                  for n in ("can0", "can1", "can2")}
         r = result(["can0", "can1", "can2"], {"can0": ["can1"], "can1": ["can0"]})
         text = "\n".join(t.render(r, links, {"can9": "down"}))
-        for needle in ("Bus 1", "Bus 2", "can0", "can1", "can2", "500k",
+        for needle in ("Bus 1", "Bus 2", "can0", "can1", "can2", "500k", "gs_usb",
                        "can9: not probed (down)", "3 interfaces probed, 2 buses"):
             self.assertIn(needle, text)
 

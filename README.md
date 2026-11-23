@@ -117,13 +117,13 @@ Positional spec: `BITRATE[/DBITRATE][@SP[/DSP]]`. Bitrates accept the suffixes
 - `canconf topo` (or `--topo` after a reconfigure) sends tagged frames on every interface and listens on all others, then draws which interfaces share a bus:
 
   ```
-  Bus 1  3 nodes
+  Bus 1  3 nodes  500k/2M
   ═══════╤═════════════╤═════════════╤═══════
          │             │             │
     ┌────┴────┐   ┌────┴────┐   ┌────┴────┐
     │   can0  │   │   can1  │   │   can2  │
     └─────────┘   └─────────┘   └─────────┘
-      500k/2M       500k/2M       500k/2M
+      gs_usb        gs_usb        gs_usb
   ```
 
   Needs no root. A lone interface is ambiguous (really alone, or no other node ACKs). Its unacknowledged probe stays pending in the controller until a node appears, so don't probe a live bus you can't afford to disturb.

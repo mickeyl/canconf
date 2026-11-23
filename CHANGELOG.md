@@ -4,6 +4,13 @@ All notable changes to **canconf** are recorded here, newest first. Patch
 releases that only adjusted packaging or release plumbing are folded into the
 next user-visible release.
 
+## v0.6.1 — 2026-11-23
+
+- `canconf topo`: nodes now show their driver name instead of the bitrate
+  (the bitrate is shared per bus and moved into the bus heading). The driver
+  comes from `bittiming_const`, falling back to the sysfs `device/driver` link
+  and finally the link kind (e.g. `vcan`).
+
 ## v0.6.0 — 2026-11-23
 
 - `canconf topo` / `canconf --topo SPEC`: diagnostic that transmits tagged

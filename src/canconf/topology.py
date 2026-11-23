@@ -14,6 +14,7 @@ ignored by later runs.
 """
 from __future__ import annotations
 
+import os
 import random
 import select
 import socket
@@ -232,6 +233,20 @@ def rate_label(link: dict | None) -> str:
     return s
 
 
+def driver_label(name: str, link: dict | None,
+                 sysfs: str = "/sys/class/net") -> str:
+    """Best-effort driver name: bittiming_const, then sysfs, then link kind."""
+    info = (link or {}).get("linkinfo") or {}
+    label = ((info.get("info_data") or {}).get("bittiming_const") or {}).get("name")
+    if label:
+        return label
+    try:
+        return os.path.basename(os.readlink(f"{sysfs}/{name}/device/driver"))
+    except OSError:
+        pass
+    return info.get("info_kind") or ""
+
+
 # ---- rendering ---------------------------------------------------------------
 
 _ASCII = str.maketrans("═╤│┌┐└┘─┴", "=+|++++-+")
@@ -289,15 +304,19 @@ def render(res: ProbeResult, links: dict[str, dict],
     n_probed = len(res.ifaces) - len(res.errors)
 
     for k, members in enumerate(buses, 1):
-        nodes = [(m, rate_label(links.get(m))) for m in members]
-        rates = {lb for _, lb in nodes if lb}
+        nodes = [(m, driver_label(m, links.get(m))) for m in members]
+        rates = {r for r in (rate_label(links.get(m)) for m in members) if r}
+        rate = next(iter(rates)) if len(rates) == 1 else ""
         if len(members) > 1:
-            title = c(f"Bus {k}", common.BOLD) + c(f"  {len(members)} nodes", common.DIM)
+            title = (c(f"Bus {k}", common.BOLD)
+                     + c(f"  {len(members)} nodes" + (f"  {rate}" if rate else ""),
+                         common.DIM))
             if len(rates) > 1:
                 title += "  " + c("bitrates differ!", common.BRIGHT_RED, common.BOLD)
         else:
             title = (c(f"Bus {k}", common.BOLD)
-                     + c("  no other interface heard on this bus", common.DIM))
+                     + c("  no other interface heard on this bus"
+                         + (f"  {rate}" if rate else ""), common.DIM))
         out += render_bus(title, nodes)
         out.append("")
 
